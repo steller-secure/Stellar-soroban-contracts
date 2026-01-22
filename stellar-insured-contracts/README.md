@@ -64,18 +64,23 @@ Manages liquidity pool for claims settlement.
 - `release_liquidity(amount)` - Release reserved amount
 
 ### 4. Governance Contract
-Decentralized governance for protocol upgrades and decisions.
-- **Create Proposal**: Community members create proposals
-- **Vote on Proposal**: Token holders vote on proposals
-- **Finalize Proposal**: Execute proposal after voting period
+Professional DAO proposal system enabling decentralized protocol decisions.
+- **Proposal Creation**: Create detailed proposals with title, description, and execution data
+- **Voting Period Enforcement**: Strict time-based voting with configurable periods
+- **Proposal Storage Schema**: Efficient storage using Soroban-compatible data structures
+- **Read-only Queries**: Comprehensive query functions for proposal data and statistics
 
 **Key Functions**:
-- `initialize(admin, token_contract, voting_period_days, min_voting_percentage)` - Initialize
-- `create_proposal(title, description, threshold_percentage)` - Create proposal
-- `get_proposal(proposal_id)` - Get proposal details
-- `vote(proposal_id, vote_weight, is_yes)` - Vote on proposal
-- `finalize_proposal(proposal_id)` - Finalize after voting
-- `get_stats()` - Get governance statistics
+- `initialize(admin, token_contract, voting_period_days, min_voting_percentage, min_quorum_percentage)` - Initialize with quorum requirements
+- `create_proposal(title, description, execution_data, threshold_percentage)` - Create detailed proposal
+- `get_proposal(proposal_id)` - Retrieve full proposal details
+- `vote(proposal_id, vote_weight, is_yes)` - Cast vote with duplicate prevention
+- `finalize_proposal(proposal_id)` - Finalize after voting period with quorum/threshold checks
+- `execute_proposal(proposal_id)` - Execute passed proposals
+- `get_active_proposals()` - Query all active proposals
+- `get_proposal_stats(proposal_id)` - Get voting statistics
+- `get_all_proposals()` - List all proposals
+- `get_vote_record(proposal_id, voter)` - Check individual voting records
 
 
 
@@ -87,11 +92,15 @@ Automated claim validation and settlement
 
 Decentralized risk pool accounting
 
-DAO governance logic
+Professional DAO governance with quorum and threshold requirements
 
 Deterministic and secure execution
 
 Upgrade-ready contract architecture
+
+Comprehensive voting period enforcement
+
+Efficient proposal storage and querying system
 
 🧑‍💻 Tech Stack
 

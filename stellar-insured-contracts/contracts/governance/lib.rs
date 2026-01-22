@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracterror, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracterror, Address, Env, Symbol, Vec};
 
 #[contract]
 pub struct GovernanceContract;
@@ -8,6 +8,18 @@ const ADMIN: Symbol = Symbol::short("ADMIN");
 const PAUSED: Symbol = Symbol::short("PAUSED");
 const CONFIG: Symbol = Symbol::short("CONFIG");
 const PROPOSAL: Symbol = Symbol::short("PROPOSAL");
+const PROPOSAL_COUNTER: Symbol = Symbol::short("PROP_CNT");
+const VOTER: Symbol = Symbol::short("VOTER");
+const PROPOSAL_LIST: Symbol = Symbol::short("PROP_LIST");
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum ProposalStatus {
+    Active = 0,
+    Passed = 1,
+    Rejected = 2,
+    Executed = 3,
+    Expired = 4,
+}
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -19,8 +31,13 @@ pub enum ContractError {
     NotFound = 5,
     AlreadyExists = 6,
     InvalidState = 7,
-    NotInitialized = 9,
-    AlreadyInitialized = 10,
+    NotInitialized = 8,
+    AlreadyInitialized = 9,
+    VotingPeriodEnded = 10,
+    AlreadyVoted = 11,
+    ProposalNotActive = 12,
+    QuorumNotMet = 13,
+    ThresholdNotMet = 14,
 }
 
 fn validate_address(_env: &Env, _address: &Address) -> Result<(), ContractError> {
@@ -40,6 +57,49 @@ fn set_paused(env: &Env, paused: bool) {
         .set(&PAUSED, &paused);
 }
 
+fn require_admin(env: &Env) -> Result<Address, ContractError> {
+    let admin: Address = env
+        .storage()
+        .persistent()
+        .get(&ADMIN)
+        .ok_or(ContractError::NotInitialized)?;
+    
+    let caller = env.current_contract_address();
+    if caller != admin {
+        return Err(ContractError::Unauthorized);
+    }
+    
+    Ok(admin)
+}
+
+fn is_voting_period_active(proposal_status: u32, voting_ends_at: u64, current_time: u64) -> bool {
+    current_time < voting_ends_at && proposal_status == ProposalStatus::Active as u32
+}
+
+fn has_voted(env: &Env, proposal_id: u64, voter: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .has(&(VOTER, proposal_id, voter))
+}
+
+fn calculate_quorum_met(yes_votes: i128, no_votes: i128, total_supply: i128, min_quorum_percentage: u32) -> bool {
+    let total_votes = yes_votes + no_votes;
+    if total_supply == 0 {
+        return false;
+    }
+    let quorum_percentage = (total_votes * 100) / total_supply;
+    quorum_percentage >= min_quorum_percentage as i128
+}
+
+fn calculate_threshold_met(yes_votes: i128, no_votes: i128, threshold_percentage: u32) -> bool {
+    let total_votes = yes_votes + no_votes;
+    if total_votes == 0 {
+        return false;
+    }
+    let yes_percentage = (yes_votes * 100) / total_votes;
+    yes_percentage >= threshold_percentage as i128
+}
+
 #[contractimpl]
 impl GovernanceContract {
     pub fn initialize(
@@ -48,6 +108,7 @@ impl GovernanceContract {
         token_contract: Address,
         voting_period_days: u32,
         min_voting_percentage: u32,
+        min_quorum_percentage: u32,
     ) -> Result<(), ContractError> {
         if env.storage().persistent().has(&ADMIN) {
             return Err(ContractError::AlreadyInitialized);
@@ -64,13 +125,27 @@ impl GovernanceContract {
             return Err(ContractError::InvalidInput);
         }
 
+        if min_quorum_percentage == 0 || min_quorum_percentage > 100 {
+            return Err(ContractError::InvalidInput);
+        }
+
         env.storage().persistent().set(&ADMIN, &admin);
-        env.storage().persistent().set(&CONFIG, &(token_contract, voting_period_days, min_voting_percentage));
+        env.storage().persistent().set(
+            &CONFIG, 
+            &(token_contract, voting_period_days, min_voting_percentage, min_quorum_percentage)
+        );
+        env.storage().persistent().set(&PROPOSAL_COUNTER, &0u64);
         
         Ok(())
     }
 
-    pub fn create_proposal(env: Env, threshold_percentage: u32) -> Result<u64, ContractError> {
+    pub fn create_proposal(
+        env: Env,
+        title: Symbol,
+        description: Symbol,
+        execution_data: Symbol,
+        threshold_percentage: u32,
+    ) -> Result<u64, ContractError> {
         if is_paused(&env) {
             return Err(ContractError::Paused);
         }
@@ -79,34 +154,65 @@ impl GovernanceContract {
             return Err(ContractError::InvalidInput);
         }
 
-        let config: (Address, u32, u32) = env
+        let config: (Address, u32, u32, u32) = env
             .storage()
             .persistent()
             .get(&CONFIG)
             .ok_or(ContractError::NotInitialized)?;
 
         let proposer = env.current_contract_address();
-        let proposal_id: u64 = env.ledger().sequence().into();
+        let proposal_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&PROPOSAL_COUNTER)
+            .unwrap_or(0) + 1;
         
         let current_time = env.ledger().timestamp();
         let voting_end_time = current_time + (86400u64 * config.1 as u64);
         
-        let proposal = (proposer.clone(), current_time, voting_end_time, threshold_percentage, 0u32, 0i128, 0i128, false);
+        let proposal = (
+            proposal_id,
+            proposer.clone(),
+            title.clone(),
+            description.clone(),
+            current_time,
+            voting_end_time,
+            threshold_percentage,
+            ProposalStatus::Active as u32,
+            0i128,
+            0i128,
+            0u32,
+            execution_data.clone(),
+        );
 
         env.storage()
             .persistent()
             .set(&(PROPOSAL, proposal_id), &proposal);
+        
+        env.storage()
+            .persistent()
+            .set(&PROPOSAL_COUNTER, &proposal_id);
+
+        let mut proposal_list: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&PROPOSAL_LIST)
+            .unwrap_or_else(|| Vec::new(&env));
+        proposal_list.push_back(proposal_id);
+        env.storage()
+            .persistent()
+            .set(&PROPOSAL_LIST, &proposal_list);
 
         env.events().publish(
             (Symbol::new(&env, "proposal_created"), proposal_id),
-            (proposer,),
+            (proposer, title, threshold_percentage),
         );
 
         Ok(proposal_id)
     }
 
-    pub fn get_proposal(env: Env, proposal_id: u64) -> Result<(Address, u64, u64, u32, u32, i128, i128, bool), ContractError> {
-        let proposal: (Address, u64, u64, u32, u32, i128, i128, bool) = env
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Result<(u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol), ContractError> {
+        let proposal: (u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol) = env
             .storage()
             .persistent()
             .get(&(PROPOSAL, proposal_id))
@@ -129,33 +235,40 @@ impl GovernanceContract {
             return Err(ContractError::InvalidInput);
         }
 
-        let _config: (Address, u32, u32) = env
+        let _config: (Address, u32, u32, u32) = env
             .storage()
             .persistent()
             .get(&CONFIG)
             .ok_or(ContractError::NotInitialized)?;
 
-        let mut proposal: (Address, u64, u64, u32, u32, i128, i128, bool) = env
+        let mut proposal: (u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol) = env
             .storage()
             .persistent()
             .get(&(PROPOSAL, proposal_id))
             .ok_or(ContractError::NotFound)?;
 
-        if proposal.4 != 0u32 {
-            return Err(ContractError::InvalidState);
-        }
-
-        if env.ledger().timestamp() >= proposal.2 {
-            return Err(ContractError::InvalidState);
+        let current_time = env.ledger().timestamp();
+        if !is_voting_period_active(proposal.7, proposal.5, current_time) {
+            return Err(ContractError::VotingPeriodEnded);
         }
 
         let voter = env.current_contract_address();
+        if has_voted(&env, proposal_id, &voter) {
+            return Err(ContractError::AlreadyVoted);
+        }
+
+        let vote_record = (voter.clone(), vote_weight, current_time, is_yes);
+
+        env.storage()
+            .persistent()
+            .set(&(VOTER, proposal_id, voter.clone()), &vote_record);
 
         if is_yes {
-            proposal.5 += vote_weight;
+            proposal.8 += vote_weight;
         } else {
-            proposal.6 += vote_weight;
+            proposal.9 += vote_weight;
         }
+        proposal.10 += 1;
 
         env.storage()
             .persistent()
@@ -163,81 +276,188 @@ impl GovernanceContract {
 
         env.events().publish(
             (Symbol::new(&env, "vote_cast"), proposal_id),
-            (voter, vote_weight, is_yes),
+            (voter, vote_weight, is_yes, proposal.8, proposal.9),
         );
 
         Ok(())
     }
 
     pub fn finalize_proposal(env: Env, proposal_id: u64) -> Result<(), ContractError> {
-        let mut proposal: (Address, u64, u64, u32, u32, i128, i128, bool) = env
+        let mut proposal: (u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol) = env
             .storage()
             .persistent()
             .get(&(PROPOSAL, proposal_id))
             .ok_or(ContractError::NotFound)?;
 
-        if proposal.4 != 0u32 {
+        if proposal.7 != ProposalStatus::Active as u32 {
+            return Err(ContractError::ProposalNotActive);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time < proposal.5 {
             return Err(ContractError::InvalidState);
         }
 
-        if env.ledger().timestamp() < proposal.2 {
-            return Err(ContractError::InvalidState);
-        }
+        let config: (Address, u32, u32, u32) = env
+            .storage()
+            .persistent()
+            .get(&CONFIG)
+            .ok_or(ContractError::NotInitialized)?;
 
-        let total_votes = proposal.5 + proposal.6;
-        let yes_percentage = if total_votes > 0 {
-            (proposal.5 * 100) / total_votes
-        } else {
-            0
-        };
+        let min_quorum_percentage = config.3;
 
-        if yes_percentage >= proposal.3 as i128 {
-            proposal.4 = 1u32;
+        let total_supply = 1000000i128;
+
+        if !calculate_quorum_met(proposal.8, proposal.9, total_supply, min_quorum_percentage) {
+            proposal.7 = ProposalStatus::Expired as u32;
+        } else if calculate_threshold_met(proposal.8, proposal.9, proposal.6) {
+            proposal.7 = ProposalStatus::Passed as u32;
         } else {
-            proposal.4 = 2u32;
+            proposal.7 = ProposalStatus::Rejected as u32;
         }
 
         env.storage()
             .persistent()
             .set(&(PROPOSAL, proposal_id), &proposal);
 
+        let total_votes = proposal.8 + proposal.9;
+        let yes_percentage = if total_votes > 0 {
+            (proposal.8 * 100) / total_votes
+        } else {
+            0
+        };
+
         env.events().publish(
             (Symbol::new(&env, "proposal_finalized"), proposal_id),
-            (proposal.4, yes_percentage),
+            (proposal.7, yes_percentage, proposal.8, proposal.9),
+        );
+
+        Ok(())
+    }
+
+    pub fn execute_proposal(env: Env, proposal_id: u64) -> Result<(), ContractError> {
+        let mut proposal: (u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol) = env
+            .storage()
+            .persistent()
+            .get(&(PROPOSAL, proposal_id))
+            .ok_or(ContractError::NotFound)?;
+
+        if proposal.7 != ProposalStatus::Passed as u32 {
+            return Err(ContractError::InvalidState);
+        }
+
+        proposal.7 = ProposalStatus::Executed as u32;
+
+        env.storage()
+            .persistent()
+            .set(&(PROPOSAL, proposal_id), &proposal);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_executed"), proposal_id),
+            (proposal.11,),
         );
 
         Ok(())
     }
 
     pub fn pause(env: Env) -> Result<(), ContractError> {
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&ADMIN)
-            .ok_or(ContractError::NotInitialized)?;
-
-        let caller = env.current_contract_address();
-        if caller != admin {
-            return Err(ContractError::Unauthorized);
-        }
-
+        require_admin(&env)?;
         set_paused(&env, true);
         Ok(())
     }
 
     pub fn unpause(env: Env) -> Result<(), ContractError> {
+        require_admin(&env)?;
+        set_paused(&env, false);
+        Ok(())
+    }
+
+    pub fn get_vote_record(env: Env, proposal_id: u64, voter: Address) -> Result<(Address, i128, u64, bool), ContractError> {
+        let vote_record: (Address, i128, u64, bool) = env
+            .storage()
+            .persistent()
+            .get(&(VOTER, proposal_id, voter))
+            .ok_or(ContractError::NotFound)?;
+        
+        Ok(vote_record)
+    }
+
+    pub fn get_all_proposals(env: Env) -> Result<Vec<u64>, ContractError> {
+        let proposal_list: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&PROPOSAL_LIST)
+            .unwrap_or_else(|| Vec::new(&env));
+        
+        Ok(proposal_list)
+    }
+
+    pub fn get_active_proposals(env: Env) -> Result<Vec<u64>, ContractError> {
+        let all_proposals = Self::get_all_proposals(env.clone())?;
+        let current_time = env.ledger().timestamp();
+        let mut active_proposals = Vec::new(&env);
+
+        for proposal_id in all_proposals.iter() {
+            if let Ok(proposal) = Self::get_proposal(env.clone(), proposal_id) {
+                if is_voting_period_active(proposal.7, proposal.5, current_time) {
+                    active_proposals.push_back(proposal_id);
+                }
+            }
+        }
+
+        Ok(active_proposals)
+    }
+
+    pub fn get_proposal_stats(env: Env, proposal_id: u64) -> Result<(i128, i128, u32, u64, u64), ContractError> {
+        let proposal: (u64, Address, Symbol, Symbol, u64, u64, u32, u32, i128, i128, u32, Symbol) = Self::get_proposal(env.clone(), proposal_id)?;
+        
+        let total_votes = proposal.8 + proposal.9;
+        let yes_percentage = if total_votes > 0 {
+            (proposal.8 * 100) / total_votes
+        } else {
+            0
+        };
+
+        Ok((
+            proposal.8,
+            proposal.9,
+            proposal.10,
+            yes_percentage as u64,
+            proposal.5,
+        ))
+    }
+
+    pub fn get_config(env: Env) -> Result<(Address, u32, u32, u32), ContractError> {
+        let config: (Address, u32, u32, u32) = env
+            .storage()
+            .persistent()
+            .get(&CONFIG)
+            .ok_or(ContractError::NotInitialized)?;
+        
+        Ok(config)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, ContractError> {
         let admin: Address = env
             .storage()
             .persistent()
             .get(&ADMIN)
             .ok_or(ContractError::NotInitialized)?;
+        
+        Ok(admin)
+    }
 
-        let caller = env.current_contract_address();
-        if caller != admin {
-            return Err(ContractError::Unauthorized);
-        }
+    pub fn is_contract_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
 
-        set_paused(&env, false);
-        Ok(())
+    pub fn get_proposal_count(env: Env) -> Result<u64, ContractError> {
+        let count: u64 = env
+            .storage()
+            .persistent()
+            .get(&PROPOSAL_COUNTER)
+            .unwrap_or(0);
+        
+        Ok(count)
     }
 }
