@@ -1,14 +1,14 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracterror, contracttype, Address, Env, Symbol, Vec, Map};
-
 // Import authorization from the common library
 use insurance_contracts::authorization::{
-    initialize_admin, require_admin, require_governance_permission, 
-    register_trusted_contract, Role, get_role
+    get_role, initialize_admin, register_trusted_contract, require_admin,
+    require_governance_permission, Role,
 };
-
 // Import invariant checks
 use insurance_invariants::{InvariantError, ProtocolInvariants};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env, Map, Symbol, Vec,
+};
 
 // ============================================================================
 // Constants
@@ -58,10 +58,18 @@ pub enum ContractError {
 impl From<insurance_contracts::authorization::AuthError> for ContractError {
     fn from(err: insurance_contracts::authorization::AuthError) -> Self {
         match err {
-            insurance_contracts::authorization::AuthError::Unauthorized => ContractError::Unauthorized,
-            insurance_contracts::authorization::AuthError::InvalidRole => ContractError::InvalidRole,
-            insurance_contracts::authorization::AuthError::RoleNotFound => ContractError::RoleNotFound,
-            insurance_contracts::authorization::AuthError::NotTrustedContract => ContractError::NotTrustedContract,
+            insurance_contracts::authorization::AuthError::Unauthorized => {
+                ContractError::Unauthorized
+            }
+            insurance_contracts::authorization::AuthError::InvalidRole => {
+                ContractError::InvalidRole
+            }
+            insurance_contracts::authorization::AuthError::RoleNotFound => {
+                ContractError::RoleNotFound
+            }
+            insurance_contracts::authorization::AuthError::NotTrustedContract => {
+                ContractError::NotTrustedContract
+            }
         }
     }
 }
@@ -84,21 +92,21 @@ impl From<InvariantError> for ContractError {
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeeType {
-    PremiumFee = 1,    // Fee from policy premiums
-    ClaimPenalty = 2,  // Penalty from rejected claims
-    SlashingFee = 3,   // Fee from slashing events
-    Other = 4,         // Miscellaneous fees
+    PremiumFee = 1,   // Fee from policy premiums
+    ClaimPenalty = 2, // Penalty from rejected claims
+    SlashingFee = 3,  // Fee from slashing events
+    Other = 4,        // Miscellaneous fees
 }
 
 /// Represents a withdrawal allocation category
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocationPurpose {
-    AuditFunding = 1,         // Fund security audits
-    DevelopmentGrants = 2,    // Development team grants
-    InsuranceReserves = 3,    // Insurance pool reserves
-    DaoOperations = 4,        // DAO operational costs
-    CommunityIncentives = 5,  // Community rewards/incentives
+    AuditFunding = 1,        // Fund security audits
+    DevelopmentGrants = 2,   // Development team grants
+    InsuranceReserves = 3,   // Insurance pool reserves
+    DaoOperations = 4,       // DAO operational costs
+    CommunityIncentives = 5, // Community rewards/incentives
 }
 
 /// Treasury configuration
@@ -107,7 +115,7 @@ pub enum AllocationPurpose {
 pub struct TreasuryConfig {
     pub admin: Address,
     pub governance_contract: Address,
-    pub fee_percentage: u32,  // Fee percentage in basis points (e.g., 500 = 5%)
+    pub fee_percentage: u32, // Fee percentage in basis points (e.g., 500 = 5%)
 }
 
 /// Fee deposit record
@@ -115,7 +123,7 @@ pub struct TreasuryConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeDeposit {
     pub fee_id: u64,
-    pub fee_type: u32,  // FeeType enum
+    pub fee_type: u32, // FeeType enum
     pub amount: i128,
     pub depositor: Address,
     pub timestamp: u64,
@@ -129,14 +137,14 @@ pub struct WithdrawalProposal {
     pub proposal_id: u64,
     pub recipient: Address,
     pub amount: i128,
-    pub purpose: u32,  // AllocationPurpose enum
+    pub purpose: u32, // AllocationPurpose enum
     pub description: Symbol,
     pub proposed_by: Address,
     pub created_at: u64,
     pub voting_ends_at: u64,
     pub yes_votes: i128,
     pub no_votes: i128,
-    pub status: u32,  // ProposalStatus enum: 0=Active, 1=Approved, 2=Rejected, 3=Executed
+    pub status: u32, // ProposalStatus enum: 0=Active, 1=Approved, 2=Rejected, 3=Executed
     pub executed: bool,
 }
 
@@ -144,7 +152,7 @@ pub struct WithdrawalProposal {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AllocationRecord {
-    pub purpose: u32,  // AllocationPurpose enum
+    pub purpose: u32, // AllocationPurpose enum
     pub total_allocated: i128,
     pub total_withdrawn: i128,
     pub allocation_count: u64,
@@ -178,24 +186,16 @@ fn validate_address(_env: &Env, _address: &Address) -> Result<(), ContractError>
 }
 
 fn is_paused(env: &Env) -> bool {
-    env.storage()
-        .persistent()
-        .get(&PAUSED)
-        .unwrap_or(false)
+    env.storage().persistent().get(&PAUSED).unwrap_or(false)
 }
 
 fn set_paused(env: &Env, paused: bool) {
-    env.storage()
-        .persistent()
-        .set(&PAUSED, &paused);
+    env.storage().persistent().set(&PAUSED, &paused);
 }
 
 /// Get current treasury balance
 fn get_balance(env: &Env) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&TREASURY_BALANCE)
-        .unwrap_or(0i128)
+    env.storage().persistent().get(&TREASURY_BALANCE).unwrap_or(0i128)
 }
 
 /// Set treasury balance with invariant checking
@@ -203,23 +203,15 @@ fn set_balance(env: &Env, amount: i128) -> Result<(), ContractError> {
     if amount < 0 {
         return Err(ContractError::BalanceViolation);
     }
-    env.storage()
-        .persistent()
-        .set(&TREASURY_BALANCE, &amount);
+    env.storage().persistent().set(&TREASURY_BALANCE, &amount);
     Ok(())
 }
 
 /// Get next proposal ID
 fn next_proposal_id(env: &Env) -> u64 {
-    let current_id: u64 = env
-        .storage()
-        .persistent()
-        .get(&PROPOSAL_COUNTER)
-        .unwrap_or(0u64);
+    let current_id: u64 = env.storage().persistent().get(&PROPOSAL_COUNTER).unwrap_or(0u64);
     let next_id = current_id + 1;
-    env.storage()
-        .persistent()
-        .set(&PROPOSAL_COUNTER, &next_id);
+    env.storage().persistent().set(&PROPOSAL_COUNTER, &next_id);
     next_id
 }
 
@@ -233,9 +225,7 @@ fn validate_amount(amount: i128) -> Result<(), ContractError> {
 
 /// Check if contract is trusted
 fn is_trusted_contract(env: &Env, contract: &Address) -> bool {
-    env.storage()
-        .persistent()
-        .has(&(TRUSTED_CONTRACTS, contract))
+    env.storage().persistent().has(&(TRUSTED_CONTRACTS, contract))
 }
 
 // ============================================================================
@@ -267,11 +257,7 @@ impl TreasuryContract {
         admin.require_auth();
         initialize_admin(&env, admin.clone());
 
-        let config = TreasuryConfig {
-            admin: admin.clone(),
-            governance_contract,
-            fee_percentage,
-        };
+        let config = TreasuryConfig { admin: admin.clone(), governance_contract, fee_percentage };
 
         env.storage().persistent().set(&CONFIG, &config);
         env.storage().persistent().set(&TREASURY_BALANCE, &0i128);
@@ -279,22 +265,20 @@ impl TreasuryContract {
         env.storage().persistent().set(&TOTAL_WITHDRAWN, &0i128);
         env.storage().persistent().set(&PROPOSAL_COUNTER, &0u64);
 
-        env.events().publish(
-            (Symbol::new(&env, "treasury_initialized"), ()),
-            admin,
-        );
+        env.events().publish((Symbol::new(&env, "treasury_initialized"), ()), admin);
 
         Ok(())
     }
 
     /// Register a trusted contract that can deposit fees
-    pub fn register_trusted_contract(env: Env, contract_address: Address) -> Result<(), ContractError> {
+    pub fn register_trusted_contract(
+        env: Env,
+        contract_address: Address,
+    ) -> Result<(), ContractError> {
         require_admin(&env)?;
         validate_address(&env, &contract_address)?;
 
-        env.storage()
-            .persistent()
-            .set(&(TRUSTED_CONTRACTS, &contract_address), &true);
+        env.storage().persistent().set(&(TRUSTED_CONTRACTS, &contract_address), &true);
 
         env.events().publish(
             (Symbol::new(&env, "trusted_contract_registered"), contract_address.clone()),
@@ -305,11 +289,7 @@ impl TreasuryContract {
     }
 
     /// Deposit premium fees from policy contract
-    pub fn deposit_premium_fee(
-        env: Env,
-        from: Address,
-        amount: i128,
-    ) -> Result<(), ContractError> {
+    pub fn deposit_premium_fee(env: Env, from: Address, amount: i128) -> Result<(), ContractError> {
         if is_paused(&env) {
             return Err(ContractError::Paused);
         }
@@ -327,19 +307,14 @@ impl TreasuryContract {
         set_balance(&env, new_balance)?;
 
         // Update total fees collected
-        let total_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_FEES_COLLECTED)
-            .unwrap_or(0i128);
+        let total_fees: i128 =
+            env.storage().persistent().get(&TOTAL_FEES_COLLECTED).unwrap_or(0i128);
         let new_total = total_fees.checked_add(amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&TOTAL_FEES_COLLECTED, &new_total);
+        env.storage().persistent().set(&TOTAL_FEES_COLLECTED, &new_total);
 
         env.events().publish(
-            (Symbol::new(&env, "premium_fee_deposited"), ()),
-            (from.clone(), amount, new_balance),
+            (Symbol::new(&env, "premium_fee_deposited"), from.clone()),
+            (amount, new_balance, new_total),
         );
 
         Ok(())
@@ -368,19 +343,14 @@ impl TreasuryContract {
         set_balance(&env, new_balance)?;
 
         // Update total fees collected
-        let total_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_FEES_COLLECTED)
-            .unwrap_or(0i128);
+        let total_fees: i128 =
+            env.storage().persistent().get(&TOTAL_FEES_COLLECTED).unwrap_or(0i128);
         let new_total = total_fees.checked_add(amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&TOTAL_FEES_COLLECTED, &new_total);
+        env.storage().persistent().set(&TOTAL_FEES_COLLECTED, &new_total);
 
         env.events().publish(
-            (Symbol::new(&env, "claim_penalty_deposited"), ()),
-            (from.clone(), amount, new_balance),
+            (Symbol::new(&env, "claim_penalty_deposited"), from.clone()),
+            (amount, new_balance, new_total),
         );
 
         Ok(())
@@ -409,19 +379,14 @@ impl TreasuryContract {
         set_balance(&env, new_balance)?;
 
         // Update total fees collected
-        let total_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_FEES_COLLECTED)
-            .unwrap_or(0i128);
+        let total_fees: i128 =
+            env.storage().persistent().get(&TOTAL_FEES_COLLECTED).unwrap_or(0i128);
         let new_total = total_fees.checked_add(amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&TOTAL_FEES_COLLECTED, &new_total);
+        env.storage().persistent().set(&TOTAL_FEES_COLLECTED, &new_total);
 
         env.events().publish(
-            (Symbol::new(&env, "slashing_fee_deposited"), ()),
-            (from.clone(), amount, new_balance),
+            (Symbol::new(&env, "slashing_fee_deposited"), from.clone()),
+            (amount, new_balance, new_total),
         );
 
         Ok(())
@@ -451,19 +416,14 @@ impl TreasuryContract {
         set_balance(&env, new_balance)?;
 
         // Update total fees collected
-        let total_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_FEES_COLLECTED)
-            .unwrap_or(0i128);
+        let total_fees: i128 =
+            env.storage().persistent().get(&TOTAL_FEES_COLLECTED).unwrap_or(0i128);
         let new_total = total_fees.checked_add(amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&TOTAL_FEES_COLLECTED, &new_total);
+        env.storage().persistent().set(&TOTAL_FEES_COLLECTED, &new_total);
 
         env.events().publish(
-            (Symbol::new(&env, "fee_deposited"), ()),
-            (from.clone(), amount, fee_type, new_balance),
+            (Symbol::new(&env, "fee_deposited"), from.clone()),
+            (amount, fee_type, new_balance, new_total),
         );
 
         Ok(())
@@ -493,11 +453,8 @@ impl TreasuryContract {
         }
 
         // Get config
-        let config: TreasuryConfig = env
-            .storage()
-            .persistent()
-            .get(&CONFIG)
-            .ok_or(ContractError::NotInitialized)?;
+        let config: TreasuryConfig =
+            env.storage().persistent().get(&CONFIG).ok_or(ContractError::NotInitialized)?;
 
         // Get current timestamp for voting period (7 days = 604800 seconds)
         let now = env.ledger().timestamp();
@@ -521,23 +478,24 @@ impl TreasuryContract {
             executed: false,
         };
 
-        env.storage()
-            .persistent()
-            .set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
+        env.storage().persistent().set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
 
         env.events().publish(
-            (Symbol::new(&env, "withdrawal_proposed"), ()),
-            (proposal_id, recipient, amount, purpose, proposer, voting_ends_at),
+            (Symbol::new(&env, "withdrawal_proposed"), proposal.recipient.clone()),
+            (
+                proposal_id,
+                proposal.amount,
+                proposal.purpose,
+                proposal.proposed_by,
+                proposal.voting_ends_at,
+            ),
         );
 
         Ok(proposal_id)
     }
 
     /// Execute approved withdrawal (DAO governance required)
-    pub fn execute_withdrawal(
-        env: Env,
-        proposal_id: u64,
-    ) -> Result<(), ContractError> {
+    pub fn execute_withdrawal(env: Env, proposal_id: u64) -> Result<(), ContractError> {
         if is_paused(&env) {
             return Err(ContractError::Paused);
         }
@@ -568,56 +526,48 @@ impl TreasuryContract {
         }
 
         // Execute withdrawal
-        let new_balance = balance.checked_sub(proposal.amount).ok_or(ContractError::BalanceViolation)?;
+        let new_balance =
+            balance.checked_sub(proposal.amount).ok_or(ContractError::BalanceViolation)?;
         set_balance(&env, new_balance)?;
 
         // Update total withdrawn
-        let total_withdrawn: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_WITHDRAWN)
-            .unwrap_or(0i128);
-        let new_total_withdrawn = total_withdrawn.checked_add(proposal.amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&TOTAL_WITHDRAWN, &new_total_withdrawn);
+        let total_withdrawn: i128 =
+            env.storage().persistent().get(&TOTAL_WITHDRAWN).unwrap_or(0i128);
+        let new_total_withdrawn =
+            total_withdrawn.checked_add(proposal.amount).ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&TOTAL_WITHDRAWN, &new_total_withdrawn);
 
         // Update allocation record
-        let mut allocation: AllocationRecord = env
-            .storage()
-            .persistent()
-            .get(&(ALLOCATIONS, proposal.purpose))
-            .unwrap_or(AllocationRecord {
-                purpose: proposal.purpose,
-                total_allocated: 0i128,
-                total_withdrawn: 0i128,
-                allocation_count: 0u64,
-            });
+        let mut allocation: AllocationRecord =
+            env.storage().persistent().get(&(ALLOCATIONS, proposal.purpose)).unwrap_or(
+                AllocationRecord {
+                    purpose: proposal.purpose,
+                    total_allocated: 0i128,
+                    total_withdrawn: 0i128,
+                    allocation_count: 0u64,
+                },
+            );
 
-        allocation.total_withdrawn = allocation.total_withdrawn.checked_add(proposal.amount).ok_or(ContractError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&(ALLOCATIONS, proposal.purpose), &allocation);
+        allocation.total_withdrawn = allocation
+            .total_withdrawn
+            .checked_add(proposal.amount)
+            .ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&(ALLOCATIONS, proposal.purpose), &allocation);
 
         // Mark proposal as executed
         proposal.executed = true;
-        env.storage()
-            .persistent()
-            .set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
+        env.storage().persistent().set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
 
         env.events().publish(
-            (Symbol::new(&env, "withdrawal_executed"), ()),
-            (proposal_id, proposal.recipient.clone(), proposal.amount, new_balance),
+            (Symbol::new(&env, "withdrawal_executed"), proposal.recipient.clone()),
+            (proposal_id, proposal.amount, new_balance, proposal.purpose),
         );
 
         Ok(())
     }
 
     /// Reject a withdrawal proposal
-    pub fn reject_proposal(
-        env: Env,
-        proposal_id: u64,
-    ) -> Result<(), ContractError> {
+    pub fn reject_proposal(env: Env, proposal_id: u64) -> Result<(), ContractError> {
         require_admin(&env)?;
 
         let mut proposal: WithdrawalProposal = env
@@ -631,23 +581,18 @@ impl TreasuryContract {
         }
 
         proposal.status = 2; // Rejected
-        env.storage()
-            .persistent()
-            .set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
+        env.storage().persistent().set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
 
         env.events().publish(
-            (Symbol::new(&env, "proposal_rejected"), ()),
-            (proposal_id, proposal.recipient.clone(), proposal.amount),
+            (Symbol::new(&env, "proposal_rejected"), proposal.recipient.clone()),
+            (proposal_id, proposal.amount, proposal.purpose),
         );
 
         Ok(())
     }
 
     /// Approve a withdrawal proposal (DAO governance required)
-    pub fn approve_proposal(
-        env: Env,
-        proposal_id: u64,
-    ) -> Result<(), ContractError> {
+    pub fn approve_proposal(env: Env, proposal_id: u64) -> Result<(), ContractError> {
         require_admin(&env)?;
 
         let mut proposal: WithdrawalProposal = env
@@ -667,13 +612,11 @@ impl TreasuryContract {
         }
 
         proposal.status = 1; // Approved
-        env.storage()
-            .persistent()
-            .set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
+        env.storage().persistent().set(&(WITHDRAWAL_PROPOSALS, proposal_id), &proposal);
 
         env.events().publish(
-            (Symbol::new(&env, "proposal_approved"), ()),
-            (proposal_id, proposal.recipient.clone(), proposal.amount),
+            (Symbol::new(&env, "proposal_approved"), proposal.recipient.clone()),
+            (proposal_id, proposal.amount, proposal.purpose),
         );
 
         Ok(())
@@ -686,19 +629,13 @@ impl TreasuryContract {
 
     /// Get treasury statistics
     pub fn get_stats(env: Env) -> Result<TreasuryStats, ContractError> {
-        let total_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_FEES_COLLECTED)
-            .unwrap_or(0i128);
+        let total_fees: i128 =
+            env.storage().persistent().get(&TOTAL_FEES_COLLECTED).unwrap_or(0i128);
 
         let total_balance = get_balance(&env);
 
-        let total_withdrawn: i128 = env
-            .storage()
-            .persistent()
-            .get(&TOTAL_WITHDRAWN)
-            .unwrap_or(0i128);
+        let total_withdrawn: i128 =
+            env.storage().persistent().get(&TOTAL_WITHDRAWN).unwrap_or(0i128);
 
         Ok(TreasuryStats {
             total_fees_collected: total_fees,
@@ -711,10 +648,7 @@ impl TreasuryContract {
     }
 
     /// Get withdrawal proposal details
-    pub fn get_proposal(
-        env: Env,
-        proposal_id: u64,
-    ) -> Result<WithdrawalProposal, ContractError> {
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Result<WithdrawalProposal, ContractError> {
         env.storage()
             .persistent()
             .get(&(WITHDRAWAL_PROPOSALS, proposal_id))
@@ -722,10 +656,7 @@ impl TreasuryContract {
     }
 
     /// Get allocation record for a purpose
-    pub fn get_allocation(
-        env: Env,
-        purpose: u32,
-    ) -> Result<AllocationRecord, ContractError> {
+    pub fn get_allocation(env: Env, purpose: u32) -> Result<AllocationRecord, ContractError> {
         env.storage()
             .persistent()
             .get(&(ALLOCATIONS, purpose))
@@ -737,10 +668,7 @@ impl TreasuryContract {
         require_admin(&env)?;
         set_paused(&env, paused);
 
-        env.events().publish(
-            (Symbol::new(&env, "pause_state_changed"), ()),
-            paused,
-        );
+        env.events().publish((Symbol::new(&env, "pause_state_changed"), ()), paused);
 
         Ok(())
     }
@@ -753,19 +681,14 @@ impl TreasuryContract {
             return Err(ContractError::InvalidInput);
         }
 
-        let mut config: TreasuryConfig = env
-            .storage()
-            .persistent()
-            .get(&CONFIG)
-            .ok_or(ContractError::NotInitialized)?;
+        let mut config: TreasuryConfig =
+            env.storage().persistent().get(&CONFIG).ok_or(ContractError::NotInitialized)?;
 
         config.fee_percentage = new_percentage;
         env.storage().persistent().set(&CONFIG, &config);
 
-        env.events().publish(
-            (Symbol::new(&env, "fee_percentage_updated"), ()),
-            new_percentage,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "fee_percentage_updated"), ()), new_percentage);
 
         Ok(())
     }
@@ -773,11 +696,12 @@ impl TreasuryContract {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
         Address, Env, Symbol,
     };
+
+    use super::*;
 
     fn create_test_env() -> (Env, Address, Address, Address) {
         let env = Env::default();
@@ -811,15 +735,10 @@ mod tests {
     fn test_initialize_already_initialized() {
         let (env, admin, governance, _) = create_test_env();
 
-        TreasuryContract::initialize(env.clone(), admin.clone(), governance.clone(), 500)
-            .unwrap();
+        TreasuryContract::initialize(env.clone(), admin.clone(), governance.clone(), 500).unwrap();
 
-        let result = TreasuryContract::initialize(
-            env.clone(),
-            admin.clone(),
-            governance.clone(),
-            500,
-        );
+        let result =
+            TreasuryContract::initialize(env.clone(), admin.clone(), governance.clone(), 500);
 
         assert_eq!(result, Err(ContractError::AlreadyInitialized));
     }
@@ -829,21 +748,13 @@ mod tests {
         let (env, admin, governance, _) = create_test_env();
 
         // Test with 0%
-        let result = TreasuryContract::initialize(
-            env.clone(),
-            admin.clone(),
-            governance.clone(),
-            0,
-        );
+        let result =
+            TreasuryContract::initialize(env.clone(), admin.clone(), governance.clone(), 0);
         assert_eq!(result, Err(ContractError::InvalidInput));
 
         // Test with > 100%
-        let result = TreasuryContract::initialize(
-            env.clone(),
-            admin.clone(),
-            governance.clone(),
-            10001,
-        );
+        let result =
+            TreasuryContract::initialize(env.clone(), admin.clone(), governance.clone(), 10001);
         assert_eq!(result, Err(ContractError::InvalidInput));
     }
 
@@ -1150,7 +1061,8 @@ mod tests {
         TreasuryContract::approve_proposal(env.clone(), proposal_id).unwrap();
 
         // Withdraw some funds to reduce balance
-        let execute_result = TreasuryContract::execute_withdrawal(env.clone(), proposal_id).unwrap();
+        let execute_result =
+            TreasuryContract::execute_withdrawal(env.clone(), proposal_id).unwrap();
 
         // Try to execute same proposal again - should fail
         let result = TreasuryContract::execute_withdrawal(env.clone(), proposal_id);
@@ -1313,11 +1225,8 @@ mod tests {
         let depositor = Address::random(&env);
 
         // Test overflow prevention
-        let result = TreasuryContract::deposit_premium_fee(
-            env.clone(),
-            depositor.clone(),
-            i128::MAX,
-        );
+        let result =
+            TreasuryContract::deposit_premium_fee(env.clone(), depositor.clone(), i128::MAX);
         assert!(result.is_ok());
 
         // Trying to add more should fail
