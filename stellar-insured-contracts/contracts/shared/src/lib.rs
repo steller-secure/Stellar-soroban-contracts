@@ -33,6 +33,8 @@ pub mod errors;
 pub mod types;
 pub mod constants;
 pub mod validation;
+pub mod versioning;
+pub mod upgradeable;
 
 // Re-export commonly used types
 pub use errors::ContractError;
@@ -46,3 +48,8 @@ pub use validation::{
     validate_premium_amount, validate_duration_days, validate_not_paused,
     safe_add, safe_sub, safe_mul, safe_div, calculate_percentage,
 };
+pub use versioning::{
+    VersionManager, VersioningError, VersionInfo, VersionTransition,
+    MigrationState, migration_state_to_u32, u32_to_migration_state,
+};
+pub use upgradeable::UpgradeableContract;
