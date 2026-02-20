@@ -210,6 +210,43 @@ pub enum ContractError {
 
     /// Invalid reserve ratio
     InvalidReserveRatio = 144,
+
+    // ===== Cross-Chain Errors (160-179) =====
+    /// Bridge not registered
+    BridgeNotRegistered = 160,
+
+    /// Chain not supported
+    ChainNotSupported = 161,
+
+    /// Message already processed
+    MessageAlreadyProcessed = 162,
+
+    /// Insufficient confirmations for cross-chain message
+    InsufficientConfirmations = 163,
+
+    /// Asset not mapped for cross-chain transfer
+    AssetNotMapped = 164,
+
+    /// Cross-chain message has expired
+    MessageExpired = 165,
+
+    /// Invalid message format
+    InvalidMessageFormat = 166,
+
+    /// Bridge is paused
+    BridgePaused = 167,
+
+    /// Validator has already confirmed this message
+    ValidatorAlreadyConfirmed = 168,
+
+    /// Cross-chain proposal not found
+    CrossChainProposalNotFound = 169,
+
+    /// Invalid chain identifier
+    InvalidChainId = 170,
+
+    /// Nonce mismatch for replay protection
+    NonceMismatch = 171,
 }
 
 /// Detailed error message provider
@@ -293,6 +330,20 @@ impl ContractError {
             ContractError::InsufficientRiskPoolBalance => "Insufficient risk pool balance",
             ContractError::RiskPoolLocked => "Risk pool is locked",
             ContractError::InvalidReserveRatio => "Invalid reserve ratio",
+
+            // Cross-Chain
+            ContractError::BridgeNotRegistered => "Bridge not registered",
+            ContractError::ChainNotSupported => "Chain not supported",
+            ContractError::MessageAlreadyProcessed => "Message already processed",
+            ContractError::InsufficientConfirmations => "Insufficient confirmations",
+            ContractError::AssetNotMapped => "Asset not mapped",
+            ContractError::MessageExpired => "Cross-chain message expired",
+            ContractError::InvalidMessageFormat => "Invalid message format",
+            ContractError::BridgePaused => "Bridge is paused",
+            ContractError::ValidatorAlreadyConfirmed => "Validator already confirmed",
+            ContractError::CrossChainProposalNotFound => "Cross-chain proposal not found",
+            ContractError::InvalidChainId => "Invalid chain ID",
+            ContractError::NonceMismatch => "Nonce mismatch",
         }
     }
 }

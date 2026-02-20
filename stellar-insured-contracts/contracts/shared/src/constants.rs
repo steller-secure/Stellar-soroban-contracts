@@ -157,6 +157,26 @@ pub const MAX_RETRY_ATTEMPTS: u32 = 3;
 /// Timeout for external contract calls (in seconds)
 pub const EXTERNAL_CALL_TIMEOUT_SECONDS: u64 = 60;
 
+// ===== Cross-Chain Constants =====
+
+/// Minimum number of validator confirmations required for cross-chain messages
+pub const MIN_CROSS_CHAIN_CONFIRMATIONS: u32 = 3;
+
+/// Maximum number of validators per bridge
+pub const MAX_VALIDATORS_PER_BRIDGE: u32 = 50;
+
+/// Cross-chain message expiry time in seconds (48 hours)
+pub const CROSS_CHAIN_MESSAGE_EXPIRY_SECONDS: u64 = 48 * ONE_DAY_SECONDS;
+
+/// Maximum number of supported chains
+pub const MAX_SUPPORTED_CHAINS: u32 = 100;
+
+/// Cross-chain governance voting period (14 days - double regular period)
+pub const CROSS_CHAIN_GOVERNANCE_VOTING_PERIOD: u64 = 14 * ONE_DAY_SECONDS;
+
+/// Cross-chain governance quorum percentage (33%)
+pub const CROSS_CHAIN_GOVERNANCE_QUORUM_PERCENT: u32 = 33;
+
 // ===== Validation Helper Functions =====
 
 /// Validate that an amount is within acceptable bounds

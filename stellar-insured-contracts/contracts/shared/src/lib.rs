@@ -42,6 +42,7 @@ pub use types::{
     PolicyStatus, ClaimStatus, ProposalStatus, ProposalType, VoteType,
     RiskPoolStatus, ClaimEvidence, VoteRecord, OracleConfig, RiskMetrics,
     PolicyMetadata, ClaimMetadata, TreasuryAllocation, DataKey,
+    CrossChainMessageStatus, CrossChainMessageType, BridgeStatus,
 };
 pub use validation::{
     validate_address, validate_positive_amount, validate_coverage_amount,

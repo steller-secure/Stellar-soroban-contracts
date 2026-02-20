@@ -111,9 +111,6 @@ pub mod errors {
         /// Contract not trusted for cross-contract calls
         NotTrustedContract = 13,
 
-        /// 🔐 Evidence-specific errors
-        EvidenceAlreadyExists = 20,
-        EvidenceNotFound = 21,
         /// Evidence already exists for this claim
         EvidenceAlreadyExists = 20,
         /// Evidence not found

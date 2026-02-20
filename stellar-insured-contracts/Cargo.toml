@@ -14,6 +14,7 @@ members = [
     "contracts/oracle",
     "contracts/treasury",
     "contracts/product-template",
+    "contracts/cross_chain",
 ]
 
 [workspace.dependencies]

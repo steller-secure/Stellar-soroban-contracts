@@ -311,10 +311,10 @@ pub fn revoke_delegated_role(env: &Env, caller: &Address, target: &Address) -> R
 }
 
 /// Get all roles assigned to an address (for audit purposes)
-pub fn get_all_roles(env: &Env) -> Vec<(Address, Role)> {
+pub fn get_all_roles(env: &Env) -> soroban_sdk::Vec<(Address, Role)> {
     // This is a simplified implementation since Soroban storage doesn't support iteration
     // In a real implementation, we'd need to maintain a separate mapping for this
-    Vec::new()
+    soroban_sdk::Vec::new(env)
 }
 
 /// Permission-based authorization (more granular than role-based)

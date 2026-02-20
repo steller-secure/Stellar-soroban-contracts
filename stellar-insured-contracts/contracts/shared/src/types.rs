@@ -523,6 +523,54 @@ pub struct TemplateValidationRules {
     pub min_update_interval: u64,
 }
 
+// ===== Cross-Chain Types =====
+
+/// Status of a cross-chain message
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CrossChainMessageStatus {
+    /// Message has been sent/queued
+    Pending = 0,
+    /// Message has been confirmed by validators
+    Confirmed = 1,
+    /// Message has been executed on target chain
+    Executed = 2,
+    /// Message has failed execution
+    Failed = 3,
+    /// Message has expired
+    Expired = 4,
+}
+
+/// Types of cross-chain messages
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CrossChainMessageType {
+    /// Asset transfer between chains
+    AssetTransfer = 0,
+    /// Governance action across chains
+    GovernanceAction = 1,
+    /// Data synchronization between chains
+    DataSync = 2,
+    /// Insurance claim across chains
+    InsuranceClaim = 3,
+    /// Policy update across chains
+    PolicyUpdate = 4,
+}
+
+/// Status of a registered bridge
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BridgeStatus {
+    /// Bridge is active and operational
+    Active = 0,
+    /// Bridge is temporarily paused
+    Paused = 1,
+    /// Bridge has been deprecated
+    Deprecated = 2,
+    /// Bridge has been deactivated
+    Inactive = 3,
+}
+
 // ===== Common Enums for Storage Keys =====
 
 /// Data key enumeration for contract storage
@@ -584,4 +632,16 @@ pub enum DataKey {
     TemplateValidationRules,
     /// Template status history
     TemplateStatusHistory,
+    /// Cross-chain bridge registration
+    CrossChainBridge,
+    /// Cross-chain message
+    CrossChainMessage,
+    /// Cross-chain asset mapping
+    CrossChainAssetMap,
+    /// Cross-chain validator
+    CrossChainValidator,
+    /// Cross-chain governance proposal
+    CrossChainProposal,
+    /// Cross-chain counter
+    CrossChainCounter,
 }

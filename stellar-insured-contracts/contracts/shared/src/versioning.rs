@@ -512,9 +512,9 @@ impl VersionManager {
         };
 
         // Trim history if it exceeds max size
-        if history.len() >= MAX_VERSION_HISTORY as usize {
+        if history.len() >= MAX_VERSION_HISTORY {
             // Keep only the most recent MAX_VERSION_HISTORY - 1 entries
-            let new_len = (MAX_VERSION_HISTORY - 1) as usize;
+            let new_len = MAX_VERSION_HISTORY - 1;
             for _ in new_len..history.len() {
                 history.pop_back();
             }
