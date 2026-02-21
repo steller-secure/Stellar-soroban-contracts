@@ -563,6 +563,11 @@ impl PolicyContract {
             (Symbol::new(&env, "PolicyIssued"), policy_id),
             (holder, coverage_amount, premium_amount, duration_days, manager, current_time),
         );
+        env.events().publish(
+            (Symbol::new(&env, "PolicyIssuedFull"), policy_id),
+            (holder.clone(), coverage_amount, premium_amount, duration_days, manager.clone(), current_time, end_time, auto_renew),
+        );
+
 
         Ok(policy_id)
     }
@@ -619,7 +624,9 @@ impl PolicyContract {
         env.events().publish(
             (Symbol::new(&env, "PolicyRenewed"), policy_id),
             (actor, new_end_time, duration_days),
+
         );
+        env.events().publish((Symbol::new(&env, "PolicyRenewedFull"), policy_id), (actor, new_end_time, duration_days, env.ledger().timestamp()));
 
         Ok(())
     }
@@ -646,7 +653,11 @@ impl PolicyContract {
         env.events().publish(
             (Symbol::new(&env, "AutoRenewUpdated"), policy_id),
             (holder, auto_renew),
+
         );
+
+        env.events().publish((Symbol::new(&env, "AutoRenewUpdatedFull"), policy_id), (holder.clone(), auto_renew, env.ledger().timestamp()));
+
 
         Ok(())
     }
@@ -710,7 +721,9 @@ impl PolicyContract {
         // Use the state machine to transition to CANCELLED
         PolicyStateMachine::transition(&env, policy_id, PolicyState::CANCELLED, actor)?;
 
-        Ok(())
+    Ok(())
+
+
     }
 
     /// Expires a policy. Only allowed when the policy is ACTIVE.
@@ -861,6 +874,11 @@ impl PolicyContract {
         set_paused(&env, false);
 
         env.events().publish((Symbol::new(&env, "unpaused"), ()), admin);
+        env.events().publish(
+            (Symbol::new(&env, "ContractUnpaused"), ()),
+            (admin, env.ledger().timestamp()),
+        );
+
 
         Ok(())
     }
@@ -883,6 +901,15 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "role_granted"), manager.clone()), admin);
+        env.events().publish(
+            (Symbol::new(&env, "PolicyManagerGranted"), ()),
+            (admin, manager.clone(), env.ledger().timestamp()),
+
+            );
+        env.events().publish((Symbol::new(&env, "PolicyManagerGrantedFull"), ()), (admin.clone(), manager.clone(), env.ledger().timestamp()));
+        );
+
+
 
         Ok(())
     }
@@ -900,6 +927,11 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "role_revoked"), manager.clone()), admin);
+        env.events().publish(
+            (Symbol::new(&env, "PolicyManagerRevoked"), ()),
+            (admin, manager.clone(), env.ledger().timestamp()),
+        );
+
 
         Ok(())
     }
@@ -927,6 +959,15 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "auditor_role_granted"), auditor.clone()), admin);
+        env.events().publish(
+            (Symbol::new(&env, "AuditorGranted"), ()),
+            (admin, auditor.clone(), env.ledger().timestamp()),
+
+            );
+        env.events().publish((Symbol::new(&env, "AuditorGrantedFull"), ()), (admin.clone(), auditor.clone(), env.ledger().timestamp()));
+        );
+
+
 
         Ok(())
     }
@@ -944,6 +985,11 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "auditor_role_revoked"), auditor.clone()), admin);
+        env.events().publish(
+            (Symbol::new(&env, "AuditorRevoked"), ()),
+            (admin, auditor.clone(), env.ledger().timestamp()),
+        );
+
 
         Ok(())
     }
@@ -961,6 +1007,7 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "role_delegated"), delegatee.clone(), role.clone()), delegator);
+        env.events().publish((Symbol::new(&env, "RoleDelegated"), ()), (delegator, delegatee.clone(), role.clone(), env.ledger().timestamp()));
 
         Ok(())
     }
@@ -978,10 +1025,13 @@ impl PolicyContract {
 
         env.events()
             .publish((Symbol::new(&env, "delegated_role_revoked"), target.clone()), admin);
+        );
+
 
         Ok(())
     }
 }
+
 
 #[cfg(test)]
 mod tests {
