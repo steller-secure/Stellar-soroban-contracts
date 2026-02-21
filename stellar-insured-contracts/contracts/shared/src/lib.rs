@@ -36,6 +36,7 @@ pub mod validation;
 pub mod versioning;
 pub mod upgradeable;
 pub mod gas_optimization;
+pub mod emergency_pause;
 
 // Re-export commonly used types
 pub use errors::ContractError;
@@ -135,6 +136,12 @@ pub use gas_optimization::{
     GasMetrics,
     StorageOptimization,
     OptimizedDataKey,
+};
+
+pub use emergency_pause::{
+    EmergencyPause,
+    EmergencyPauseConfig,
+    EmergencyPauseEvent,
 };
 
 pub use versioning::{

@@ -33,6 +33,9 @@ pub enum ContractError {
     /// Contract is paused and operations are not allowed
     Paused = 2,
 
+    /// Specific function is paused and cannot be called
+    FunctionPaused = 17,
+
     /// Generic invalid input (prefer specific validation errors below)
     InvalidInput = 3,
 
@@ -339,6 +342,7 @@ impl ContractError {
             // General / Authorization
             ContractError::Unauthorized => "Caller is not authorized",
             ContractError::Paused => "Contract is paused",
+            ContractError::FunctionPaused => "Specific function is paused",
             ContractError::InvalidInput => "Invalid input provided",
             ContractError::InsufficientFunds => "Insufficient funds",
             ContractError::NotFound => "Resource not found",

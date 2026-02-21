@@ -8,6 +8,7 @@ use insurance_contracts::authorization::{
 };
 use insurance_contracts::rate_limit::{self, RateLimitConfig};
 use insurance_contracts::gas_optimization::{GasOptimizer, PerformanceMonitor};
+use insurance_contracts::emergency_pause::EmergencyPause;
 
 // Import invariant checks and error types
 use insurance_invariants::{InvariantError, ProtocolInvariants};
@@ -460,6 +461,9 @@ impl PolicyContract {
         // Register risk pool contract as trusted for cross-contract calls
         register_trusted_contract(&env, &admin, &risk_pool)?;
 
+        // Initialize emergency pause system
+        EmergencyPause::initialize(&env, &admin)?;
+
         let config = Config { risk_pool };
         env.storage().persistent().set(&DataKey::Config, &config);
 
@@ -530,6 +534,9 @@ impl PolicyContract {
         manager.require_auth();
         require_policy_management(&env, &manager)?;
 
+        // Check emergency pause status
+        EmergencyPause::validate_not_paused(&env, Some(&Symbol::new(&env, "issue_policy")))?;
+
         if is_paused(&env) {
             return Err(ContractError::Paused);
         }
@@ -576,6 +583,9 @@ impl PolicyContract {
         duration_days: u32,
     ) -> Result<(), ContractError> {
         actor.require_auth();
+
+        // Check emergency pause status for renewal
+        EmergencyPause::validate_not_paused(&env, Some(&Symbol::new(&env, "renew_policy")))?;
 
         let mut policy = Self::get_policy(env.clone(), policy_id)?;
 
@@ -709,6 +719,9 @@ impl PolicyContract {
     pub fn cancel_policy(env: Env, actor: Address, policy_id: u64) -> Result<(), ContractError> {
         require_admin(&env, &actor)?;
 
+        // Check emergency pause status for policy cancellation
+        EmergencyPause::validate_not_paused(&env, Some(&Symbol::new(&env, "cancel_policy")))?;
+
         // Use the state machine to transition to CANCELLED
         PolicyStateMachine::transition(&env, policy_id, PolicyState::CANCELLED, actor)?;
 
@@ -718,6 +731,9 @@ impl PolicyContract {
     /// Expires a policy. Only allowed when the policy is ACTIVE.
     pub fn expire_policy(env: Env, actor: Address, policy_id: u64) -> Result<(), ContractError> {
         require_admin(&env, &actor)?;
+
+        // Check emergency pause status for policy expiration
+        EmergencyPause::validate_not_paused(&env, Some(&Symbol::new(&env, "expire_policy")))?;
 
         // Use the state machine to transition to EXPIRED
         PolicyStateMachine::transition(&env, policy_id, PolicyState::EXPIRED, actor)?;
@@ -867,6 +883,67 @@ impl PolicyContract {
         env.events().publish((Symbol::new(&env, "unpaused"), ()), admin);
 
         Ok(())
+    }
+
+    /// Emergency pause the entire contract
+    pub fn emergency_pause(
+        env: Env,
+        admin: Address,
+        reason: Symbol,
+        max_duration_seconds: u64,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::activate_emergency_pause(&env, &admin, reason, max_duration_seconds)
+    }
+
+    /// Deactivate emergency pause
+    pub fn emergency_unpause(
+        env: Env,
+        admin: Address,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::deactivate_emergency_pause(&env, &admin, reason)
+    }
+
+    /// Pause specific functions
+    pub fn pause_functions(
+        env: Env,
+        admin: Address,
+        functions: Vec<Symbol>,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::pause_functions(&env, &admin, &functions, reason)
+    }
+
+    /// Unpause specific functions
+    pub fn unpause_functions(
+        env: Env,
+        admin: Address,
+        functions: Vec<Symbol>,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::unpause_functions(&env, &admin, &functions, reason)
+    }
+
+    /// Get emergency pause configuration
+    pub fn get_emergency_pause_config(env: Env) -> Result<insurance_contracts::emergency_pause::EmergencyPauseConfig, ContractError> {
+        EmergencyPause::get_pause_config(&env)
+    }
+
+    /// Get emergency pause history
+    pub fn get_emergency_pause_history(env: Env, limit: u32) -> Vec<insurance_contracts::emergency_pause::EmergencyPauseEvent> {
+        EmergencyPause::get_pause_history(&env, limit)
     }
 
     /// Grant policy manager role to an address (admin only)

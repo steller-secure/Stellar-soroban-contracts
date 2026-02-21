@@ -45,6 +45,7 @@ use insurance_contracts::authorization::{
     require_trusted_contract, Role,
 };
 use insurance_contracts::rate_limit::{self, RateLimitConfig};
+use insurance_contracts::emergency_pause::EmergencyPause;
 use insurance_contracts::types::ClaimStatus;
 
 // Import invariants and safety assertions
@@ -260,6 +261,9 @@ impl ClaimsContract {
         // Store contract configuration
         env.storage().persistent().set(&CONFIG, &(policy_contract, risk_pool));
 
+        // Initialize emergency pause system
+        EmergencyPause::initialize(&env, &admin)?;
+
         env.events().publish((symbol_short!("init"), ()), admin);
 
         Ok(())
@@ -396,6 +400,9 @@ impl ClaimsContract {
         if is_paused(&env) {
             return Err(ContractError::Paused);
         }
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("submit_claim")))?;
 
         rate_limit::enforce(
             &env,
@@ -507,6 +514,9 @@ impl ClaimsContract {
         // Verify identity and require claim processing permission
         processor.require_auth();
         require_claim_processing(&env, &processor)?;
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("approve_claim")))?;
 
         let mut claim: (u64, Address, i128, ClaimStatus, u64) = env
             .storage()
@@ -573,6 +583,9 @@ impl ClaimsContract {
         // Verify identity and require claim processing permission
         processor.require_auth();
         require_claim_processing(&env, &processor)?;
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("start_review")))?;
 
         let mut claim: (u64, Address, i128, ClaimStatus, u64) = env
             .storage()
@@ -600,6 +613,9 @@ impl ClaimsContract {
         // Verify identity and require claim processing permission
         processor.require_auth();
         require_claim_processing(&env, &processor)?;
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("reject_claim")))?;
 
         let mut claim: (u64, Address, i128, ClaimStatus, u64) = env
             .storage()
@@ -627,6 +643,9 @@ impl ClaimsContract {
         // Verify identity and require claim processing permission
         processor.require_auth();
         require_claim_processing(&env, &processor)?;
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("settle_claim")))?;
 
         let mut claim: (u64, Address, i128, ClaimStatus, u64) = env
             .storage()
@@ -694,6 +713,67 @@ impl ClaimsContract {
         Ok(())
     }
 
+    /// Emergency pause the entire contract
+    pub fn emergency_pause(
+        env: Env,
+        admin: Address,
+        reason: Symbol,
+        max_duration_seconds: u64,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::activate_emergency_pause(&env, &admin, reason, max_duration_seconds)
+    }
+
+    /// Deactivate emergency pause
+    pub fn emergency_unpause(
+        env: Env,
+        admin: Address,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::deactivate_emergency_pause(&env, &admin, reason)
+    }
+
+    /// Pause specific functions
+    pub fn pause_functions(
+        env: Env,
+        admin: Address,
+        functions: Vec<Symbol>,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::pause_functions(&env, &admin, &functions, reason)
+    }
+
+    /// Unpause specific functions
+    pub fn unpause_functions(
+        env: Env,
+        admin: Address,
+        functions: Vec<Symbol>,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        require_admin(&env, &admin)?;
+        
+        EmergencyPause::unpause_functions(&env, &admin, &functions, reason)
+    }
+
+    /// Get emergency pause configuration
+    pub fn get_emergency_pause_config(env: Env) -> Result<insurance_contracts::emergency_pause::EmergencyPauseConfig, ContractError> {
+        EmergencyPause::get_pause_config(&env)
+    }
+
+    /// Get emergency pause history
+    pub fn get_emergency_pause_history(env: Env, limit: u32) -> Vec<insurance_contracts::emergency_pause::EmergencyPauseEvent> {
+        EmergencyPause::get_pause_history(&env, limit)
+    }
+
     /// Grant claim processor role to an address (admin only)
     pub fn grant_processor_role(
         env: Env,
@@ -702,6 +782,9 @@ impl ClaimsContract {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         require_admin(&env, &admin)?;
+        
+        // Check for emergency pause
+        EmergencyPause::validate_not_paused(&env, Some(&symbol_short!("grant_processor_role")))?;
 
         insurance_contracts::authorization::grant_role(
             &env,
