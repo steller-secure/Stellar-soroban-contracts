@@ -13,6 +13,8 @@ soroban-sdk = { workspace = true }
 insurance-contracts = { path = "../" }
 insurance-invariants = { path = "../invariants" }
 shared = { path = "../shared" }
+emergency-pause = { path = "../../emergency_pause" }
+gas-optimization = { path = "../../gas_optimization" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

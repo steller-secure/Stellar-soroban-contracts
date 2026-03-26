@@ -13,9 +13,6 @@ use insurance_invariants::{InvariantError, ProtocolInvariants};
 // Import gas optimization utilities
 use insurance_contracts::gas_optimization::{GasOptimizer, PerformanceMonitor};
 
-// Import optimized risk pool implementation
-use crate::optimized_risk_pool::OptimizedRiskPool;
-
 #[contract]
 pub struct RiskPoolContract;
 
@@ -437,9 +434,13 @@ impl RiskPoolContract {
         let config: (Address, i128) =
             env.storage().persistent().get(&CONFIG).ok_or(ContractError::NotInitialized)?;
 
-        // Use optimized provider info access
-        let provider_info = OptimizedRiskPool::get_provider_info_optimized(&env, &provider)?;
-        let current_stake = OptimizedRiskPool::from_compact_amount(provider_info.total_deposited);
+        // Get provider info directly
+        let provider_info: (i128, i128, u64) = env
+            .storage()
+            .persistent()
+            .get(&(PROVIDER, provider))
+            .ok_or(ContractError::NotFound)?;
+        let current_stake = provider_info.1;
 
         // After the amount is added, the provider's cumulative stake must meet min_provider_stake
         if current_stake.checked_add(amount).unwrap_or(i128::MAX) < config.1 {
@@ -465,9 +466,21 @@ impl RiskPoolContract {
             context,
         )?;
 
-        // Use optimized update operations
-        OptimizedRiskPool::update_provider_info_optimized(&env, &provider, amount, amount)?;
-        OptimizedRiskPool::update_pool_stats_optimized(&env, amount, 0, amount, 0)?;
+        // Update provider info directly
+        let new_provider_info = (
+            provider_info.0.checked_add(amount).ok_or(ContractError::Overflow)?,
+            provider_info.1.checked_add(amount).ok_or(ContractError::Overflow)?,
+            provider_info.2,
+        );
+        env.storage().persistent().set(&(PROVIDER, provider), &new_provider_info);
+
+        // Update pool stats directly
+        let mut stats: (i128, i128, i128, u64) =
+            env.storage().persistent().get(&POOL_STATS).ok_or(ContractError::NotInitialized)?;
+        stats.0 = stats.0.checked_add(amount).ok_or(ContractError::Overflow)?;
+        stats.2 = stats.2.checked_add(amount).ok_or(ContractError::Overflow)?;
+        stats.3 = if provider_info.2 == 0 { 1 } else { stats.3 };
+        env.storage().persistent().set(&POOL_STATS, &stats);
 
         // I1: Assert liquidity invariant holds after deposit
         check_liquidity_invariant(&env)?;
