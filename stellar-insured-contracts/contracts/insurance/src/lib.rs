@@ -320,6 +320,29 @@ mod propchain_insurance {
         pub min_risk_score: u32,
     }
 
+    /// Result of a single batch claim operation
+    #[derive(
+        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchClaimResult {
+        pub claim_id: u64,
+        pub success: bool,
+        pub error: Option<InsuranceError>,
+    }
+
+    /// Summary of batch claim processing
+    #[derive(
+        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchClaimSummary {
+        pub total_processed: u64,
+        pub successful: u64,
+        pub failed: u64,
+        pub results: Vec<BatchClaimResult>,
+    }
+
     #[derive(
         Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
     )]
@@ -1345,6 +1368,206 @@ mod propchain_insurance {
                 .claims
                 .get(&claim_id)
                 .ok_or(InsuranceError::ClaimNotFound)?;
+            if claim.status != ClaimStatus::Pending && claim.status != ClaimStatus::UnderReview {
+                return Err(InsuranceError::ClaimAlreadyProcessed);
+            }
+
+            let now = self.env().block_timestamp();
+            claim.assessor = Some(caller);
+            claim.oracle_report_url = oracle_report_url;
+            claim.processed_at = Some(now);
+
+            if approved {
+                let policy = self
+                    .policies
+                    .get(&claim.policy_id)
+                    .ok_or(InsuranceError::PolicyNotFound)?;
+
+                // Apply deductible
+                let payout = if claim.claim_amount > policy.deductible {
+                    claim.claim_amount.saturating_sub(policy.deductible)
+                } else {
+                    0
+                };
+
+                claim.payout_amount = payout;
+                claim.status = ClaimStatus::Approved;
+                self.claims.insert(&claim_id, &claim);
+
+                // Execute payout
+                self.execute_payout(claim_id, claim.policy_id, claim.claimant, payout)?;
+
+                self.env().emit_event(ClaimApproved {
+                    claim_id,
+                    policy_id: claim.policy_id,
+                    payout_amount: payout,
+                    approved_by: caller,
+                    timestamp: now,
+                });
+            } else {
+                claim.status = ClaimStatus::Rejected;
+                claim.rejection_reason = rejection_reason.clone();
+                self.claims.insert(&claim_id, &claim);
+
+                self.env().emit_event(ClaimRejected {
+                    claim_id,
+                    policy_id: claim.policy_id,
+                    reason: rejection_reason,
+                    rejected_by: caller,
+                    timestamp: now,
+                });
+            }
+
+            Ok(())
+        }
+
+        // =====================================================================
+        // BATCH CLAIM OPERATIONS
+        // =====================================================================
+
+        /// Batch approve multiple claims in a single transaction
+        /// Returns summary with individual results for partial failure handling
+        #[ink(message)]
+        pub fn batch_approve_claims(
+            &mut self,
+            claim_ids: Vec<u64>,
+            oracle_report_url: String,
+        ) -> Result<BatchClaimSummary, InsuranceError> {
+            let caller = self.env().caller();
+
+            if caller != self.admin && !self.authorized_assessors.get(&caller).unwrap_or(false) {
+                return Err(InsuranceError::Unauthorized);
+            }
+
+            let mut results: Vec<BatchClaimResult> = Vec::new();
+            let mut successful = 0u64;
+            let mut failed = 0u64;
+
+            for claim_id in claim_ids.iter() {
+                let result = self.process_single_claim(
+                    claim_id,
+                    true,
+                    oracle_report_url.clone(),
+                    String::new(),
+                    caller,
+                );
+
+                match &result {
+                    BatchClaimResult { success: true, .. } => {
+                        successful += 1;
+                    }
+                    BatchClaimResult { success: false, .. } => {
+                        failed += 1;
+                    }
+                }
+
+                results.push(result);
+            }
+
+            let summary = BatchClaimSummary {
+                total_processed: (successful + failed),
+                successful,
+                failed,
+                results,
+            };
+
+            Ok(summary)
+        }
+
+        /// Batch reject multiple claims in a single transaction
+        /// Returns summary with individual results for partial failure handling
+        #[ink(message)]
+        pub fn batch_reject_claims(
+            &mut self,
+            claim_ids: Vec<u64>,
+            rejection_reason: String,
+        ) -> Result<BatchClaimSummary, InsuranceError> {
+            let caller = self.env().caller();
+
+            if caller != self.admin && !self.authorized_assessors.get(&caller).unwrap_or(false) {
+                return Err(InsuranceError::Unauthorized);
+            }
+
+            let mut results: Vec<BatchClaimResult> = Vec::new();
+            let mut successful = 0u64;
+            let mut failed = 0u64;
+
+            for claim_id in claim_ids.iter() {
+                let result = self.process_single_claim(
+                    claim_id,
+                    false,
+                    String::new(),
+                    rejection_reason.clone(),
+                    caller,
+                );
+
+                match &result {
+                    BatchClaimResult { success: true, .. } => {
+                        successful += 1;
+                    }
+                    BatchClaimResult { success: false, .. } => {
+                        failed += 1;
+                    }
+                }
+
+                results.push(result);
+            }
+
+            let summary = BatchClaimSummary {
+                total_processed: (successful + failed),
+                successful,
+                failed,
+                results,
+            };
+
+            Ok(summary)
+        }
+
+        /// Internal helper to process a single claim within a batch
+        /// Returns result without failing the entire batch
+        fn process_single_claim(
+            &mut self,
+            claim_id: u64,
+            approved: bool,
+            oracle_report_url: String,
+            rejection_reason: String,
+            caller: AccountId,
+        ) -> BatchClaimResult {
+            // Try to process the claim
+            match self.process_claim_inner(
+                claim_id,
+                approved,
+                oracle_report_url,
+                rejection_reason,
+                caller,
+            ) {
+                Ok(()) => BatchClaimResult {
+                    claim_id,
+                    success: true,
+                    error: None,
+                },
+                Err(error) => BatchClaimResult {
+                    claim_id,
+                    success: false,
+                    error: Some(error),
+                },
+            }
+        }
+
+        /// Inner claim processing logic (extracted from process_claim)
+        fn process_claim_inner(
+            &mut self,
+            claim_id: u64,
+            approved: bool,
+            oracle_report_url: String,
+            rejection_reason: String,
+            caller: AccountId,
+        ) -> Result<(), InsuranceError> {
+            let mut claim = self
+                .claims
+                .get(&claim_id)
+                .ok_or(InsuranceError::ClaimNotFound)?;
+
             if claim.status != ClaimStatus::Pending && claim.status != ClaimStatus::UnderReview {
                 return Err(InsuranceError::ClaimAlreadyProcessed);
             }
@@ -3415,5 +3638,283 @@ mod insurance_tests {
         // Should be auto-approved and PAID because of event_id 101
         assert_eq!(claim.status, ClaimStatus::Paid);
         assert!(claim.payout_amount > 0);
+    }
+
+    // =========================================================================
+    // BATCH CLAIM TESTS
+    // =========================================================================
+
+    #[ink::test]
+    fn test_batch_approve_claims_works() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        // Setup pool and policies
+        let pool_id = create_pool(&mut contract);
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        // Create multiple policies and claims
+        let mut claim_ids = Vec::new();
+        for i in 0..3 {
+            add_risk_assessment(&mut contract, i + 1);
+            test::set_value_transferred::<DefaultEnvironment>(1_000_000_000u128);
+            let policy_result = contract.create_policy(
+                i + 1,
+                CoverageType::Fire,
+                100_000_000_000u128,
+                pool_id,
+                86400 * 365,
+            );
+            assert!(policy_result.is_ok());
+            let policy_id = policy_result.unwrap();
+
+            // Submit claim
+            let claim_result = contract.submit_claim(
+                policy_id,
+                50_000_000_000u128,
+                format!("Test claim {}", i),
+                valid_evidence(),
+            );
+            assert!(claim_result.is_ok());
+            claim_ids.push(claim_result.unwrap());
+        }
+
+        // Set caller as authorized assessor
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+        contract.add_authorized_assessor(accounts.alice).unwrap();
+
+        // Batch approve all claims
+        let result = contract.batch_approve_claims(claim_ids.clone(), "ipfs://batch-report".into());
+
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+
+        // Verify summary
+        assert_eq!(summary.total_processed, 3);
+        assert_eq!(summary.successful, 3);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.results.len(), 3);
+
+        // Verify all claims succeeded
+        for result in summary.results.iter() {
+            assert!(result.success);
+            assert!(result.error.is_none());
+
+            // Verify claim status
+            let claim = contract.get_claim(result.claim_id).unwrap();
+            assert_eq!(claim.status, ClaimStatus::Approved);
+        }
+    }
+
+    #[ink::test]
+    fn test_batch_reject_claims_works() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        // Setup pool and policies
+        let pool_id = create_pool(&mut contract);
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        // Create multiple policies and claims
+        let mut claim_ids = Vec::new();
+        for i in 0..3 {
+            add_risk_assessment(&mut contract, i + 1);
+            test::set_value_transferred::<DefaultEnvironment>(1_000_000_000u128);
+            let policy_result = contract.create_policy(
+                i + 1,
+                CoverageType::Fire,
+                100_000_000_000u128,
+                pool_id,
+                86400 * 365,
+            );
+            assert!(policy_result.is_ok());
+            let policy_id = policy_result.unwrap();
+
+            // Submit claim
+            let claim_result = contract.submit_claim(
+                policy_id,
+                50_000_000_000u128,
+                format!("Test claim {}", i),
+                valid_evidence(),
+            );
+            assert!(claim_result.is_ok());
+            claim_ids.push(claim_result.unwrap());
+        }
+
+        // Set caller as authorized assessor
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+        contract.add_authorized_assessor(accounts.alice).unwrap();
+
+        // Batch reject all claims
+        let result =
+            contract.batch_reject_claims(claim_ids.clone(), "Does not meet criteria".into());
+
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+
+        // Verify summary
+        assert_eq!(summary.total_processed, 3);
+        assert_eq!(summary.successful, 3);
+        assert_eq!(summary.failed, 0);
+
+        // Verify all claims were rejected
+        for result in summary.results.iter() {
+            assert!(result.success);
+            assert!(result.error.is_none());
+
+            // Verify claim status
+            let claim = contract.get_claim(result.claim_id).unwrap();
+            assert_eq!(claim.status, ClaimStatus::Rejected);
+            assert_eq!(claim.rejection_reason, "Does not meet criteria");
+        }
+    }
+
+    #[ink::test]
+    fn test_batch_approve_partial_failure() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        // Setup pool and policy
+        let pool_id = create_pool(&mut contract);
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        add_risk_assessment(&mut contract, 1);
+        test::set_value_transferred::<DefaultEnvironment>(1_000_000_000u128);
+        let policy_result = contract.create_policy(
+            1,
+            CoverageType::Fire,
+            100_000_000_000u128,
+            pool_id,
+            86400 * 365,
+        );
+        assert!(policy_result.is_ok());
+        let policy_id = policy_result.unwrap();
+
+        // Submit one valid claim
+        let claim_result = contract.submit_claim(
+            policy_id,
+            50_000_000_000u128,
+            "Valid claim".into(),
+            valid_evidence(),
+        );
+        assert!(claim_result.is_ok());
+        let valid_claim_id = claim_result.unwrap();
+
+        // Add invalid claim ID (doesn't exist)
+        let invalid_claim_id = 999u64;
+
+        // Set caller as authorized assessor
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+        contract.add_authorized_assessor(accounts.alice).unwrap();
+
+        // Batch approve with mix of valid and invalid claims
+        let mut claim_ids = Vec::new();
+        claim_ids.push(valid_claim_id);
+        claim_ids.push(invalid_claim_id);
+
+        let result = contract.batch_approve_claims(claim_ids, "ipfs://report".into());
+
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+
+        // Verify partial success
+        assert_eq!(summary.total_processed, 2);
+        assert_eq!(summary.successful, 1);
+        assert_eq!(summary.failed, 1);
+
+        // Check individual results
+        let valid_result = summary.results.get(0).unwrap();
+        assert!(valid_result.success);
+        assert!(valid_result.error.is_none());
+        assert_eq!(valid_result.claim_id, valid_claim_id);
+
+        let invalid_result = summary.results.get(1).unwrap();
+        assert!(!invalid_result.success);
+        assert!(invalid_result.error.is_some());
+        assert_eq!(invalid_result.error.unwrap(), InsuranceError::ClaimNotFound);
+        assert_eq!(invalid_result.claim_id, invalid_claim_id);
+    }
+
+    #[ink::test]
+    fn test_batch_approve_unauthorized() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        let claim_ids = Vec::new();
+        let result = contract.batch_approve_claims(claim_ids, "ipfs://report".into());
+
+        assert_eq!(result.unwrap_err(), InsuranceError::Unauthorized);
+    }
+
+    #[ink::test]
+    fn test_batch_reject_unauthorized() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        let claim_ids = Vec::new();
+        let result = contract.batch_reject_claims(claim_ids, "Reason".into());
+
+        assert_eq!(result.unwrap_err(), InsuranceError::Unauthorized);
+    }
+
+    #[ink::test]
+    fn test_batch_approve_already_processed() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        // Setup
+        let pool_id = create_pool(&mut contract);
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+
+        add_risk_assessment(&mut contract, 1);
+        test::set_value_transferred::<DefaultEnvironment>(1_000_000_000u128);
+        let policy_result = contract.create_policy(
+            1,
+            CoverageType::Fire,
+            100_000_000_000u128,
+            pool_id,
+            86400 * 365,
+        );
+        assert!(policy_result.is_ok());
+        let policy_id = policy_result.unwrap();
+
+        // Submit and approve claim
+        let claim_result = contract.submit_claim(
+            policy_id,
+            50_000_000_000u128,
+            "Test claim".into(),
+            valid_evidence(),
+        );
+        assert!(claim_result.is_ok());
+        let claim_id = claim_result.unwrap();
+
+        // First approval
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+        contract.add_authorized_assessor(accounts.alice).unwrap();
+
+        let first_result =
+            contract.batch_approve_claims(vec![claim_id].into(), "ipfs://report1".into());
+        assert!(first_result.is_ok());
+
+        // Try to approve again (should fail for this claim)
+        let mut claim_ids = Vec::new();
+        claim_ids.push(claim_id);
+        let second_result = contract.batch_approve_claims(claim_ids, "ipfs://report2".into());
+
+        assert!(second_result.is_ok());
+        let summary = second_result.unwrap();
+
+        // Should have 1 failure due to ClaimAlreadyProcessed
+        assert_eq!(summary.total_processed, 1);
+        assert_eq!(summary.successful, 0);
+        assert_eq!(summary.failed, 1);
+
+        let result = summary.results.get(0).unwrap();
+        assert!(!result.success);
+        assert_eq!(result.error.unwrap(), InsuranceError::ClaimAlreadyProcessed);
     }
 }
