@@ -10,24 +10,17 @@ name = "propchain_tests"
 path = "lib.rs"
 
 [dependencies]
-# ink! dependencies
-ink = { version = "5.0.0", default-features = false }
-scale = { package = "parity-scale-codec", version = "3.6.9", default-features = false, features = ["derive"] }
-scale-info = { version = "2.10.0", default-features = false, features = ["derive"] }
-
-# Testing dependencies
-ink_e2e = { version = "5.0.0", optional = true }
-ink_env = { version = "5.0.0", default-features = false }
+# Soroban dependencies
+soroban-sdk = { version = "20.0.0" }
 
 # Contract dependencies
-propchain-contracts = { path = "../contracts/lib", default-features = false }
-property-token = { path = "../contracts/property-token", default-features = false }
+escrow = { path = "../contracts/escrow" }
+oracle = { path = "../contracts/oracle" }
+lib = { path = "../contracts/lib" }
 
-# Async runtime
-tokio = { version = "1.0", features = ["full"], optional = true }
-
-# Utilities
-serde = { version = "1.0", default-features = false, features = ["derive"] }
+# Testing dependencies
+[dev-dependencies]
+soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 serde_json = { version = "1.0", default-features = false }
 
 
