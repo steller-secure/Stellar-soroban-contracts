@@ -11,7 +11,6 @@ repository.workspace = true
 ink = { workspace = true }
 scale = { workspace = true, features = ["derive"] }
 scale-info = { workspace = true, features = ["derive"], optional = true }
-propchain-traits = { path = "../traits", default-features = false }
 
 [lib]
 path = "src/lib.rs"
@@ -22,6 +21,5 @@ std = [
     "ink/std",
     "scale/std",
     "scale-info/std",
-    "propchain-traits/std",
 ]
 ink-as-dependency = []
