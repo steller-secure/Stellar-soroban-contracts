@@ -22,18 +22,15 @@ lib = { path = "../contracts/lib" }
 [dev-dependencies]
 soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 serde_json = { version = "1.0", default-features = false }
-
-
-# Coverage tools
-[dev-dependencies.cargo-tarpaulin]
-version = "0.27"
-
-[dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
 propchain-contracts = { path = "../contracts/lib" }
 property-token = { path = "../contracts/property-token", default-features = false }
 proptest = { version = "1.4", default-features = false, features = ["std"] }
 propchain-escrow = { path = "../contracts/escrow" }
+
+# Coverage tools
+[dev-dependencies.cargo-tarpaulin]
+version = "0.27"
 
 [features]
 default = ["std"]
@@ -43,4 +40,4 @@ std = [
     "serde_json/std",
     "tokio",
 ]
-e2e-tests = ["std", "ink_e2e"]
+e2e-tests = ["std"]

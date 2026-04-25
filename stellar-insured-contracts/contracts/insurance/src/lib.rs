@@ -886,6 +886,17 @@ mod propchain_insurance {
             reinsurance_threshold: u128,
         ) -> Result<u64, InsuranceError> {
             self.ensure_admin()?;
+            
+            // Input validation
+            if name.is_empty() {
+                return Err(InsuranceError::InvalidParameters);
+            }
+            if max_coverage_ratio == 0 || max_coverage_ratio > 10000 {
+                return Err(InsuranceError::InvalidParameters); // Max 100% coverage
+            }
+            if reinsurance_threshold == 0 {
+                return Err(InsuranceError::InvalidParameters);
+            }
 
             let pool_id = self.pool_count + 1;
             self.pool_count = pool_id;
@@ -911,18 +922,32 @@ mod propchain_insurance {
             };
 
             self.pools.insert(&pool_id, &pool);
+            
+            // Emit event for pool creation
+            let timestamp = self.env().block_timestamp();
+            self.env().emit_event(PoolCapitalized {
+                pool_id,
+                provider: self.env().caller(),
+                amount: 0, // Initial creation, no deposit yet
+                timestamp,
+            });
+            
             Ok(pool_id)
         }
 
         /// Deposit native liquidity into a pool (reward-per-share stake).
         #[ink(message, payable)]
         pub fn deposit_liquidity(&mut self, pool_id: u64) -> Result<(), InsuranceError> {
+            // Require explicit authorization for this operation
+            self.env().require_auth();
+            
             let caller = self.env().caller();
             let amount = self.env().transferred_value();
             
             // Check if contract is paused
             if self.is_paused {
                 return Err(InsuranceError::ContractPaused);
+            }
             if amount == 0 {
                 return Err(InsuranceError::ZeroAmount);
             }
@@ -950,22 +975,13 @@ mod propchain_insurance {
                         vesting_claimed: 0,
                         vesting_start: 0,
                     });
-            provider.deposited_amount += amount;
-            
-            // FIX: Calculate share percentage correctly
-            let total_pool_capital = pool.total_capital;
-            if total_pool_capital > 0 {
-                provider.share_percentage = ((provider.deposited_amount * 10_000) / total_pool_capital) as u32;
-            } else {
-                provider.share_percentage = 10_000; // 100% for first provider
-            }
-            
+            provider.provider_stake = provider.provider_stake.checked_add(amount)
+                .ok_or(InsuranceError::InvalidParameters)?;
 
             let acc = pool.accumulated_reward_per_share;
             provider.reward_debt = provider
                 .reward_debt
                 .saturating_add(amount.saturating_mul(acc).saturating_div(REWARD_PRECISION));
-            provider.provider_stake = provider.provider_stake.saturating_add(amount);
 
             pool.total_provider_stake = pool.total_provider_stake.saturating_add(amount);
             pool.total_capital = pool.total_capital.saturating_add(amount);
@@ -1124,6 +1140,9 @@ mod propchain_insurance {
             pool_id: u64,
             amount: u128,
         ) -> Result<(), InsuranceError> {
+            // Require explicit authorization for this operation
+            self.env().require_auth();
+            
             if amount == 0 {
                 return Err(InsuranceError::ZeroAmount);
             }
@@ -1770,6 +1789,9 @@ mod propchain_insurance {
         /// Cancel an active policy (policyholder or admin)
         #[ink(message)]
         pub fn cancel_policy(&mut self, policy_id: u64) -> Result<(), InsuranceError> {
+            // Require explicit authorization for this operation
+            self.env().require_auth();
+            
             let caller = self.env().caller();
             let mut policy = self
                 .policies
@@ -1820,6 +1842,9 @@ mod propchain_insurance {
             description: String,
             evidence: EvidenceMetadata,
         ) -> Result<u64, InsuranceError> {
+            // Require explicit authorization for this operation
+            self.env().require_auth();
+            
             let caller = self.env().caller();
             let now = self.env().block_timestamp();
             
@@ -1828,11 +1853,12 @@ mod propchain_insurance {
                 return Err(InsuranceError::ContractPaused);
             }
 
+            // Input validation for claim amount
+            if claim_amount == 0 {
+                return Err(InsuranceError::ZeroAmount);
+            }
+
             // #133 – validate evidence metadata
-            let uri = &evidence.uri;
-            if !uri.starts_with("ipfs://") && !uri.starts_with("https://") {
-                return Err(InsuranceError::InvalidEvidenceUri);
-            // --- Evidence validation (evict invalid submissions immediately) ---
             if evidence.evidence_type.is_empty() {
                 return Err(InsuranceError::EvidenceNonceEmpty);
             }
@@ -1845,7 +1871,7 @@ mod propchain_insurance {
             }
             
             // CRITICAL FIX: Check nonce hasn't been used before (prevents replay attacks)
-            let nonce_key = (policy_id, evidence.nonce.clone());
+            let nonce_key = (policy_id, evidence.evidence_type.clone());
             if self.used_evidence_nonces.get(&nonce_key).unwrap_or(false) {
                 return Err(InsuranceError::NonceAlreadyUsed);
             }
