@@ -12,6 +12,8 @@ pub enum Error {
     BuyerSellerSame = 5,
     EscrowNotFound = 6,
     InvalidState = 7,
+    EscrowNotCreated = 8,
+    EscrowNotFunded = 9,
 }
 
 #[contract]
@@ -118,7 +120,7 @@ impl EscrowContract {
             escrow_data;
 
         if status != symbol_short!("created") {
-            return Err(Error::InvalidState);
+            return Err(Error::EscrowNotCreated);
         }
 
         buyer.require_auth();
@@ -161,7 +163,7 @@ impl EscrowContract {
             escrow_data;
 
         if status != symbol_short!("funded") {
-            return Err(Error::InvalidState);
+            return Err(Error::EscrowNotFunded);
         }
 
         seller.require_auth();
