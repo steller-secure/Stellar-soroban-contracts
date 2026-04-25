@@ -868,6 +868,9 @@ mod propchain_insurance {
             }
         }
 
+        /// Maximum number of claims to process in a single batch operation
+        const MAX_BATCH_SIZE: usize = 10;
+
         // =====================================================================
         // POOL MANAGEMENT
         // =====================================================================
@@ -2061,7 +2064,7 @@ mod propchain_insurance {
         // BATCH CLAIM OPERATIONS
         // =====================================================================
 
-        /// Batch approve multiple claims in a single transaction
+        /// Batch approve multiple claims in a single transaction (limited to MAX_BATCH_SIZE for gas efficiency)
         /// Returns summary with individual results for partial failure handling
         #[ink(message)]
         #[must_use]
@@ -2076,11 +2079,28 @@ mod propchain_insurance {
                 return Err(InsuranceError::Unauthorized);
             }
 
+            let max_to_process = claim_ids.len().min(Self::MAX_BATCH_SIZE);
             let mut results: Vec<BatchClaimResult> = Vec::new();
             let mut successful = 0u64;
             let mut failed = 0u64;
 
-            for claim_id in claim_ids.iter() {
+            for i in 0..max_to_process {
+                let result = self.process_single_claim(
+                    claim_ids[i],
+                    true,
+                    oracle_report_url.clone(),
+                    String::new(),
+                    caller,
+                );
+
+                match &result {
+                    BatchClaimResult { success: true, .. } => {
+                        successful += 1;
+                    }
+                    BatchClaimResult { success: false, .. } => {
+                        failed += 1;
+                    }
+                }
                 let result = self.process_single_claim(
                     *claim_id,
                     true,
@@ -2111,7 +2131,7 @@ mod propchain_insurance {
             Ok(summary)
         }
 
-        /// Batch reject multiple claims in a single transaction
+        /// Batch reject multiple claims in a single transaction (limited to MAX_BATCH_SIZE for gas efficiency)
         /// Returns summary with individual results for partial failure handling
         #[ink(message)]
         pub fn batch_reject_claims(
@@ -2125,11 +2145,28 @@ mod propchain_insurance {
                 return Err(InsuranceError::Unauthorized);
             }
 
+            let max_to_process = claim_ids.len().min(Self::MAX_BATCH_SIZE);
             let mut results: Vec<BatchClaimResult> = Vec::new();
             let mut successful = 0u64;
             let mut failed = 0u64;
 
-            for claim_id in claim_ids.iter() {
+            for i in 0..max_to_process {
+                let result = self.process_single_claim(
+                    claim_ids[i],
+                    false,
+                    String::new(),
+                    rejection_reason.clone(),
+                    caller,
+                );
+
+                match &result {
+                    BatchClaimResult { success: true, .. } => {
+                        successful += 1;
+                    }
+                    BatchClaimResult { success: false, .. } => {
+                        failed += 1;
+                    }
+                }
                 let result = self.process_single_claim(
                     *claim_id,
                     false,
