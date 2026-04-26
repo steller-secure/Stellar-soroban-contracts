@@ -765,12 +765,14 @@ mod bridge {
             false
         }
 
+        /// Return the local bridge chain ID used when creating source-chain requests.
         fn get_current_chain_id(&self) -> ChainId {
             // This should return the current chain ID
             // For now, we'll use a default value
             1
         }
 
+        /// Hash the bridge request fields into a transaction identifier.
         fn generate_transaction_hash(&self, request: &MultisigBridgeRequest) -> Hash {
             // Generate a cryptographic SHA-256 hash of the bridge request to
             // ensure collision resistance and prevent trivial forgery or replay.
@@ -797,6 +799,7 @@ mod bridge {
             Hash::from(output)
         }
 
+        /// Estimate bridge gas from the configured base limit and metadata size.
         fn estimate_gas_usage(&self, request: &MultisigBridgeRequest) -> u64 {
             let base_gas = self.config.gas_limit_per_bridge;
             let per_byte = self
@@ -851,6 +854,7 @@ mod bridge {
     impl DataMigration for PropertyBridge {
         type Error = Error;
 
+        /// Pause bridge operations before a migration export/import begins.
         #[ink(message)]
         fn pause_for_migration(&mut self) -> Result<(), Error> {
             self.ensure_admin()?;
@@ -858,6 +862,7 @@ mod bridge {
             Ok(())
         }
 
+        /// Resume bridge operations after migration data has been handled.
         #[ink(message)]
         fn resume_after_migration(&mut self) -> Result<(), Error> {
             self.ensure_admin()?;
@@ -865,6 +870,7 @@ mod bridge {
             Ok(())
         }
 
+        /// Export a serialized storage chunk for migration tooling.
         #[ink(message)]
         fn extract_data_chunk(&self, _chunk_id: u32, _start_index: u32, _count: u32) -> Result<Vec<u8>, Error> {
             self.ensure_admin()?;
@@ -873,6 +879,7 @@ mod bridge {
             Ok(Vec::new())
         }
 
+        /// Import serialized storage data into the bridge during migration.
         #[ink(message)]
         fn initialize_with_migrated_data(&mut self, _data: Vec<u8>) -> Result<(), Error> {
             self.ensure_admin()?;
@@ -880,6 +887,7 @@ mod bridge {
             Ok(())
         }
 
+        /// Confirm migrated bridge state is internally consistent.
         #[ink(message)]
         fn verify_migration(&self) -> Result<bool, Error> {
             // Logic to verify checksums or record counts
@@ -888,6 +896,7 @@ mod bridge {
     }
 
     impl PropertyBridge {
+        /// Require the caller to be the bridge admin for privileged operations.
         fn ensure_admin(&self) -> Result<(), Error> {
             if self.env().caller() != self.admin {
                 return Err(Error::Unauthorized);

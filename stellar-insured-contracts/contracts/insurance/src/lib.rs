@@ -186,6 +186,7 @@ mod propchain_insurance {
     }
 
     impl From<&str> for EvidenceMetadata {
+        /// Convert a legacy evidence URI into structured evidence metadata defaults.
         fn from(s: &str) -> Self {
             EvidenceMetadata {
                 evidence_type: "unknown".into(),
@@ -863,6 +864,7 @@ mod propchain_insurance {
     include!("insurance_impl.rs");
 
     impl Default for PropertyInsurance {
+        /// Build a default instance with a zero admin for tests and tooling.
         fn default() -> Self {
             Self::new(AccountId::from([0x0; 32]))
         }
