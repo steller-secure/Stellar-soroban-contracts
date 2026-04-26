@@ -28,6 +28,7 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Load the escrow storage map or return `NotInitialized` before setup.
     fn load_escrows(env: &Env) -> Result<Map<u64, Val>, Error> {
         env.storage()
             .instance()
@@ -35,6 +36,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Persist the in-memory escrow map after a state transition.
     fn save_escrows(env: &Env, escrows: &Map<u64, Val>) {
         env.storage()
             .instance()
