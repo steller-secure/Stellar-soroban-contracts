@@ -16,6 +16,7 @@ pub enum DataKey {
     Operators,
     ReqCounter,
     TxCounter,
+    Nonce(Address),
 }
 
 /// Maximum bridge history entries retained per account (prevents unbounded growth).

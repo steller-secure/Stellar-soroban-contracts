@@ -16,4 +16,5 @@ pub enum DataKey {
     MultiSig(u64),
     Signature(u64, ApprovalType, Address),
     SigCount(u64, ApprovalType),
+    Nonce(Address),
 }

@@ -11,6 +11,7 @@ use types::{ApprovalType, EscrowData, EscrowStatus, MultiSigConfig};
 use validation::{get_admin, require_not_paused, require_valid_multisig, require_non_zero_address};
 
 const CONTRACT_VERSION: u32 = 1;
+const MAX_PARTICIPANTS: u32 = 10;
 
 #[contract]
 pub struct AdvancedEscrow;
@@ -54,8 +55,20 @@ impl AdvancedEscrow {
         participants: Vec<Address>,
         required_signatures: u32,
         release_time_lock: Option<u64>,
+        nonce: u64,
     ) -> u64 {
         require_not_paused(&env);
+
+        // Nonce validation for replay protection (#349)
+        let current_nonce: u64 = env.storage().persistent().get(&DataKey::Nonce(buyer.clone())).unwrap_or(0);
+        if nonce != current_nonce + 1 {
+            panic!("Invalid nonce");
+        }
+        env.storage().persistent().set(&DataKey::Nonce(buyer.clone()), &nonce);
+
+        if participants.len() > MAX_PARTICIPANTS {
+            panic!("Too many participants");
+        }
         require_valid_multisig(required_signatures, participants.len());
         require_non_zero_address(&buyer);
         require_non_zero_address(&seller);
