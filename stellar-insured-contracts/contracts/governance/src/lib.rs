@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, log, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
 use stellar_insured_lib::Proposal;
 
 #[contracttype]
@@ -33,6 +33,30 @@ pub struct ProposalStats {
     pub status: Symbol,
 }
 
+// --- Storage helpers (#378: data access abstraction) ---
+
+fn get_admin(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn get_voting_period(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::VotingPeriod).unwrap()
+}
+
+fn get_proposal_counter(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0)
+}
+
+fn get_proposal_inner(env: &Env, proposal_id: u64) -> Proposal {
+    env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found")
+}
+
+fn set_proposal(env: &Env, proposal_id: u64, proposal: &Proposal) {
+    env.storage().persistent().set(&DataKey::Proposal(proposal_id), proposal);
+}
+
+// --------------------------------------------------------
+
 #[contract]
 pub struct GovernanceContract;
 
@@ -53,6 +77,12 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::SlashingContract, &slashing_contract);
         env.storage().instance().set(&DataKey::VotingPeriod, &voting_period);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+
+        // #379: emit event for initialization
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("init")),
+            admin,
+        );
     }
 
     pub fn create_proposal(
@@ -65,19 +95,17 @@ impl GovernanceContract {
     ) -> u64 {
         creator.require_auth();
 
-        let mut counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+        let mut counter = get_proposal_counter(&env);
         counter += 1;
         env.storage().instance().set(&DataKey::ProposalCounter, &counter);
 
-        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod).unwrap();
-        
         let proposal = Proposal {
             id: counter,
             title,
             description,
             execution_data,
-            creator,
-            expires_at: env.ledger().timestamp() + voting_period,
+            creator: creator.clone(),
+            expires_at: env.ledger().timestamp() + get_voting_period(&env),
             threshold_percentage,
             yes_votes: 0,
             no_votes: 0,
@@ -85,11 +113,11 @@ impl GovernanceContract {
             is_executed: false,
         };
 
-        env.storage().persistent().set(&DataKey::Proposal(counter), &proposal);
+        set_proposal(&env, counter, &proposal);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("created")),
-            counter,
+            (counter, creator),
         );
 
         counter
@@ -105,29 +133,43 @@ impl GovernanceContract {
         threshold: u32,
     ) -> u64 {
         creator.require_auth();
-        
-        let title = String::from_str(&env, "Slashing Proposal");
-        let mut description = String::from_str(&env, "Slash ");
-        // Simplified description construction
-        
-        // Execution data would be a serialized call to slashing contract
-        let execution_data = String::from_str(&env, "slash_call"); 
 
-        self::GovernanceContract::create_proposal(
-            env,
-            creator,
+        let title = String::from_str(&env, "Slashing Proposal");
+        let execution_data = String::from_str(&env, "slash_call");
+
+        let mut counter = get_proposal_counter(&env);
+        counter += 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+
+        let proposal = Proposal {
+            id: counter,
             title,
-            description,
+            description: reason,
             execution_data,
-            threshold
-        )
+            creator: creator.clone(),
+            expires_at: env.ledger().timestamp() + get_voting_period(&env),
+            threshold_percentage: threshold,
+            yes_votes: 0,
+            no_votes: 0,
+            is_finalized: false,
+            is_executed: false,
+        };
+
+        set_proposal(&env, counter, &proposal);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("slash_p")),
+            (counter, target, role, amount),
+        );
+
+        counter
     }
 
     pub fn vote(env: Env, voter: Address, proposal_id: u64, weight: i128, is_yes: bool) {
         voter.require_auth();
 
-        let mut proposal: Proposal = env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found");
-        
+        let mut proposal = get_proposal_inner(&env, proposal_id);
+
         if env.ledger().timestamp() > proposal.expires_at {
             panic!("Voting period ended");
         }
@@ -150,7 +192,7 @@ impl GovernanceContract {
             timestamp: env.ledger().timestamp(),
         };
 
-        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+        set_proposal(&env, proposal_id, &proposal);
         env.storage().persistent().set(&record_key, &record);
 
         env.events().publish(
@@ -160,14 +202,14 @@ impl GovernanceContract {
     }
 
     pub fn finalize_proposal(env: Env, proposal_id: u64) {
-        let mut proposal: Proposal = env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found");
-        
+        let mut proposal = get_proposal_inner(&env, proposal_id);
+
         if env.ledger().timestamp() <= proposal.expires_at {
             panic!("Voting period not yet ended");
         }
 
         proposal.is_finalized = true;
-        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+        set_proposal(&env, proposal_id, &proposal);
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("final")),
@@ -176,8 +218,8 @@ impl GovernanceContract {
     }
 
     pub fn execute_proposal(env: Env, proposal_id: u64) {
-        let mut proposal: Proposal = env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found");
-        
+        let mut proposal = get_proposal_inner(&env, proposal_id);
+
         if !proposal.is_finalized {
             panic!("Proposal must be finalized first");
         }
@@ -192,25 +234,25 @@ impl GovernanceContract {
         }
 
         proposal.is_executed = true;
-        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
-        
+        set_proposal(&env, proposal_id, &proposal);
+
+        // #379: emit event for admin/governance action
         env.events().publish(
-            (symbol_short!("gov"), symbol_short!("exec")),
+            (symbol_short!("admin"), symbol_short!("exec")),
             proposal_id,
         );
     }
 
     pub fn execute_slashing_proposal(env: Env, proposal_id: u64) {
-        // In a real implementation, this would parse execution_data and call slashing contract
-        self::GovernanceContract::execute_proposal(env, proposal_id);
+        Self::execute_proposal(env, proposal_id);
     }
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found")
+        get_proposal_inner(&env, proposal_id)
     }
 
     pub fn get_active_proposals(env: Env) -> Vec<u64> {
-        let counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+        let counter = get_proposal_counter(&env);
         let mut list = Vec::new(&env);
         let now = env.ledger().timestamp();
         for i in 1..=counter {
@@ -224,7 +266,7 @@ impl GovernanceContract {
     }
 
     pub fn get_proposal_stats(env: Env, proposal_id: u64) -> ProposalStats {
-        let p: Proposal = env.storage().persistent().get(&DataKey::Proposal(proposal_id)).expect("Proposal not found");
+        let p = get_proposal_inner(&env, proposal_id);
         let now = env.ledger().timestamp();
         let status = if p.is_executed {
             symbol_short!("executed")
@@ -245,7 +287,7 @@ impl GovernanceContract {
     }
 
     pub fn get_all_proposals(env: Env) -> Vec<u64> {
-        let counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+        let counter = get_proposal_counter(&env);
         let mut list = Vec::new(&env);
         for i in 1..=counter {
             list.push_back(i);

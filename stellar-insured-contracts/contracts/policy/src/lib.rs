@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, log};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 use stellar_insured_lib::{InsurancePolicy, PolicyStatus, PolicyType};
 
 #[contracttype]
@@ -11,6 +11,26 @@ pub enum DataKey {
     Policy(u64),
     PolicyCounter,
 }
+
+// --- Storage helpers (#378: data access abstraction) ---
+
+fn get_admin(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn get_policy_counter(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::PolicyCounter).unwrap_or(0)
+}
+
+fn get_policy_inner(env: &Env, policy_id: u64) -> InsurancePolicy {
+    env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found")
+}
+
+fn set_policy(env: &Env, policy_id: u64, policy: &InsurancePolicy) {
+    env.storage().persistent().set(&DataKey::Policy(policy_id), policy);
+}
+
+// --------------------------------------------------------
 
 #[contract]
 pub struct PolicyContract;
@@ -34,10 +54,10 @@ impl PolicyContract {
         duration_days: u32,
         policy_type: PolicyType,
     ) -> u64 {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
 
-        let mut counter: u64 = env.storage().instance().get(&DataKey::PolicyCounter).unwrap_or(0);
+        let mut counter = get_policy_counter(&env);
         counter += 1;
         env.storage().instance().set(&DataKey::PolicyCounter, &counter);
 
@@ -55,7 +75,7 @@ impl PolicyContract {
             risk_pool,
         };
 
-        env.storage().persistent().set(&DataKey::Policy(counter), &policy);
+        set_policy(&env, counter, &policy);
 
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("issued")),
@@ -66,11 +86,16 @@ impl PolicyContract {
     }
 
     pub fn get_policy(env: Env, policy_id: u64) -> InsurancePolicy {
-        env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found")
+        get_policy_inner(&env, policy_id)
+    }
+
+    // Alias used by claims contract cross-contract call
+    pub fn get_pol(env: Env, policy_id: u64) -> InsurancePolicy {
+        get_policy_inner(&env, policy_id)
     }
 
     pub fn renew_policy(env: Env, policy_id: u64, duration_days: u32) {
-        let mut policy: InsurancePolicy = env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found");
+        let mut policy = get_policy_inner(&env, policy_id);
         policy.holder.require_auth();
 
         if policy.status != PolicyStatus::Active && policy.status != PolicyStatus::Renewed {
@@ -80,7 +105,7 @@ impl PolicyContract {
         policy.duration_days += duration_days;
         policy.status = PolicyStatus::Renewed;
 
-        env.storage().persistent().set(&DataKey::Policy(policy_id), &policy);
+        set_policy(&env, policy_id, &policy);
 
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("renewed")),
@@ -89,11 +114,11 @@ impl PolicyContract {
     }
 
     pub fn cancel_policy(env: Env, policy_id: u64) {
-        let mut policy: InsurancePolicy = env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found");
+        let mut policy = get_policy_inner(&env, policy_id);
         policy.holder.require_auth();
 
         policy.status = PolicyStatus::Cancelled;
-        env.storage().persistent().set(&DataKey::Policy(policy_id), &policy);
+        set_policy(&env, policy_id, &policy);
 
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("cancelled")),
@@ -102,8 +127,8 @@ impl PolicyContract {
     }
 
     pub fn expire_policy(env: Env, policy_id: u64) {
-        let mut policy: InsurancePolicy = env.storage().persistent().get(&DataKey::Policy(policy_id)).expect("Policy not found");
-        
+        let mut policy = get_policy_inner(&env, policy_id);
+
         let now = env.ledger().timestamp();
         let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
 
@@ -112,7 +137,7 @@ impl PolicyContract {
         }
 
         policy.status = PolicyStatus::Expired;
-        env.storage().persistent().set(&DataKey::Policy(policy_id), &policy);
+        set_policy(&env, policy_id, &policy);
 
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("expired")),
@@ -121,6 +146,6 @@ impl PolicyContract {
     }
 
     pub fn get_stats(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::PolicyCounter).unwrap_or(0)
+        get_policy_counter(&env)
     }
 }

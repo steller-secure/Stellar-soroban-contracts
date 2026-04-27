@@ -1,6 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol, Map};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
+
+// Maximum slashing history entries per (target, role) to prevent storage bloat (#380)
+const MAX_HISTORY: u32 = 50;
 
 #[contracttype]
 #[derive(Clone)]
@@ -8,9 +11,9 @@ pub enum DataKey {
     Admin,
     Governance,
     RiskPool,
-    PenaltyParams(Symbol), // Role -> Params
-    ViolationCount(Address, Symbol), // (Target, Role) -> Count
-    History(Address, Symbol), // (Target, Role) -> History
+    PenaltyParams(Symbol),
+    ViolationCount(Address, Symbol),
+    History(Address, Symbol),
     SlashableRoles,
     Paused,
 }
@@ -32,6 +35,38 @@ pub struct SlashingRecord {
     pub amount: i128,
     pub timestamp: u64,
 }
+
+// --- Storage helpers (#378: data access abstraction) ---
+
+fn get_admin(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn get_governance(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Governance).unwrap()
+}
+
+fn is_paused(env: &Env) -> bool {
+    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+}
+
+fn get_slashable_roles(env: &Env) -> Vec<Symbol> {
+    env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(env))
+}
+
+fn get_violation_count_inner(env: &Env, target: &Address, role: &Symbol) -> u32 {
+    env.storage().persistent().get(&DataKey::ViolationCount(target.clone(), role.clone())).unwrap_or(0)
+}
+
+fn get_history_inner(env: &Env, target: &Address, role: &Symbol) -> Vec<SlashingRecord> {
+    env.storage().persistent().get(&DataKey::History(target.clone(), role.clone())).unwrap_or(Vec::new(env))
+}
+
+fn set_history(env: &Env, target: &Address, role: &Symbol, history: &Vec<SlashingRecord>) {
+    env.storage().persistent().set(&DataKey::History(target.clone(), role.clone()), history);
+}
+
+// --------------------------------------------------------
 
 #[contract]
 pub struct SlashingContract;
@@ -55,7 +90,7 @@ impl SlashingContract {
     }
 
     pub fn configure_penalty_parameters(env: Env, role: Symbol, params: PenaltyParams) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
 
         env.storage().persistent().set(&DataKey::PenaltyParams(role.clone()), &params);
@@ -63,23 +98,27 @@ impl SlashingContract {
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("config")),
             (role, params.percentage, params.multiplier),
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("cfg_pen")),
+            role,
         );
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
-        let governance: Address = env.storage().instance().get(&DataKey::Governance).unwrap();
+        let governance = get_governance(&env);
         governance.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if is_paused(&env) {
             panic!("Contract paused");
         }
 
-        if !self::SlashingContract::can_be_slashed(env.clone(), target.clone(), role.clone()) {
+        if !Self::can_be_slashed(env.clone(), target.clone(), role.clone()) {
             panic!("Target not eligible for slashing");
         }
 
-        // Record violation
-        let mut count: u32 = env.storage().persistent().get(&DataKey::ViolationCount(target.clone(), role.clone())).unwrap_or(0);
+        let mut count = get_violation_count_inner(&env, &target, &role);
         count += 1;
         env.storage().persistent().set(&DataKey::ViolationCount(target.clone(), role.clone()), &count);
 
@@ -91,13 +130,19 @@ impl SlashingContract {
             timestamp: env.ledger().timestamp(),
         };
 
-        let mut history: Vec<SlashingRecord> = env.storage().persistent().get(&DataKey::History(target.clone(), role.clone())).unwrap_or(Vec::new(&env));
+        // #380: cap history to MAX_HISTORY entries to prevent storage bloat
+        let mut history = get_history_inner(&env, &target, &role);
+        if history.len() >= MAX_HISTORY {
+            // Remove oldest entry (index 0)
+            let mut trimmed = Vec::new(&env);
+            for i in 1..history.len() {
+                trimmed.push_back(history.get(i).unwrap());
+            }
+            history = trimmed;
+        }
         history.push_back(record);
-        env.storage().persistent().set(&DataKey::History(target, role.clone()), &history);
+        set_history(&env, &target, &role, &history);
 
-        // Notify risk pool or transfer funds
-        // risk_pool.slash_stake(target, amount)
-        
         env.events().publish(
             (symbol_short!("slash"), role),
             amount,
@@ -105,10 +150,10 @@ impl SlashingContract {
     }
 
     pub fn add_slashable_role(env: Env, role: Symbol) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
 
-        let mut roles: Vec<Symbol> = env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(&env));
+        let mut roles = get_slashable_roles(&env);
         if !roles.contains(role.clone()) {
             roles.push_back(role.clone());
             env.storage().instance().set(&DataKey::SlashableRoles, &roles);
@@ -118,13 +163,19 @@ impl SlashingContract {
                 role,
             );
         }
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("role_add")),
+            role,
+        );
     }
 
     pub fn remove_slashable_role(env: Env, role: Symbol) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
 
-        let roles: Vec<Symbol> = env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(&env));
+        let roles = get_slashable_roles(&env);
         let mut new_roles = Vec::new(&env);
         for r in roles.iter() {
             if r != role {
@@ -135,27 +186,30 @@ impl SlashingContract {
         
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("rolerm")),
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("role_rm")),
             role,
         );
     }
 
     pub fn get_slashing_history(env: Env, target: Address, role: Symbol) -> Vec<SlashingRecord> {
-        env.storage().persistent().get(&DataKey::History(target, role)).unwrap_or(Vec::new(&env))
+        get_history_inner(&env, &target, &role)
     }
 
     pub fn get_violation_count(env: Env, target: Address, role: Symbol) -> u32 {
-        env.storage().persistent().get(&DataKey::ViolationCount(target, role)).unwrap_or(0)
+        get_violation_count_inner(&env, &target, &role)
     }
 
     pub fn can_be_slashed(env: Env, target: Address, role: Symbol) -> bool {
-        let roles: Vec<Symbol> = env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(&env));
+        let roles = get_slashable_roles(&env);
         if !roles.contains(role.clone()) {
             return false;
         }
 
-        // Check cooldown
         if let Some(params) = env.storage().persistent().get::<DataKey, PenaltyParams>(&DataKey::PenaltyParams(role.clone())) {
-            let history = self::SlashingContract::get_slashing_history(env.clone(), target, role);
+            let history = get_history_inner(&env, &target, &role);
             if let Some(last) = history.last() {
                 if env.ledger().timestamp() < last.timestamp + params.cooldown_seconds {
                     return false;
@@ -167,23 +221,31 @@ impl SlashingContract {
     }
 
     pub fn pause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
         
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("pause")),
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("paused")),
             true,
         );
     }
 
     pub fn unpause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin = get_admin(&env);
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
         
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("unpause")),
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("paused")),
             false,
         );
     }
