@@ -71,6 +71,11 @@ impl PropertyBridge {
                 .persistent()
                 .set(&DataKey::ChainInfo(chain_id), &chain_info);
         }
+        
+        env.events().publish(
+            (symbol_short!("bridge"), symbol_short!("init")),
+            (admin, min_signatures, max_signatures),
+        );
     }
 
     pub fn version(env: Env) -> u32 {
@@ -159,7 +164,7 @@ impl PropertyBridge {
             panic!("Already signed");
         }
 
-        request.signatures.push_back(operator);
+        request.signatures.push_back(operator.clone());
 
         if !approve {
             request.status = BridgeOperationStatus::Failed;
@@ -170,6 +175,11 @@ impl PropertyBridge {
         env.storage()
             .persistent()
             .set(&DataKey::Request(request_id), &request);
+        
+        env.events().publish(
+            (symbol_short!("bridge"), symbol_short!("signed")),
+            (request_id, operator, approve),
+        );
     }
 
     pub fn execute_bridge(env: Env, operator: Address, request_id: u64) {
@@ -283,6 +293,11 @@ impl PropertyBridge {
         env.storage()
             .persistent()
             .set(&DataKey::Request(request_id), &request);
+        
+        env.events().publish(
+            (symbol_short!("bridge"), symbol_short!("recover")),
+            request_id,
+        );
 
             false
         }
@@ -380,6 +395,11 @@ impl PropertyBridge {
         let mut config: BridgeConfig = env.storage().instance().get(&DataKey::Config).unwrap();
         config.emergency_pause = paused;
         env.storage().instance().set(&DataKey::Config, &config);
+        
+        env.events().publish(
+            (symbol_short!("bridge"), symbol_short!("pause")),
+            paused,
+        );
     }
 
     pub fn get_history(env: Env, account: Address) -> Vec<BridgeTransaction> {
@@ -447,8 +467,13 @@ impl PropertyBridge {
         let mut operators: Vec<Address> =
             env.storage().instance().get(&DataKey::Operators).unwrap();
         if !operators.contains(operator.clone()) {
-            operators.push_back(operator);
+            operators.push_back(operator.clone());
             env.storage().instance().set(&DataKey::Operators, &operators);
+            
+            env.events().publish(
+                (symbol_short!("bridge"), symbol_short!("opadd")),
+                operator,
+            );
         }
     }
 
@@ -467,5 +492,10 @@ impl PropertyBridge {
             }
         }
         env.storage().instance().set(&DataKey::Operators, &new_operators);
+        
+        env.events().publish(
+            (symbol_short!("bridge"), symbol_short!("oprm")),
+            operator,
+        );
     }
 }

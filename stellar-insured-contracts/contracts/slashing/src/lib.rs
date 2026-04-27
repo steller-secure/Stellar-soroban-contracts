@@ -47,13 +47,23 @@ impl SlashingContract {
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::SlashableRoles, &Vec::<Symbol>::new(&env));
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("init")),
+            (admin, governance, risk_pool),
+        );
     }
 
     pub fn configure_penalty_parameters(env: Env, role: Symbol, params: PenaltyParams) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
-        env.storage().persistent().set(&DataKey::PenaltyParams(role), &params);
+        env.storage().persistent().set(&DataKey::PenaltyParams(role.clone()), &params);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("config")),
+            (role, params.percentage, params.multiplier),
+        );
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
@@ -100,8 +110,13 @@ impl SlashingContract {
 
         let mut roles: Vec<Symbol> = env.storage().instance().get(&DataKey::SlashableRoles).unwrap_or(Vec::new(&env));
         if !roles.contains(role.clone()) {
-            roles.push_back(role);
+            roles.push_back(role.clone());
             env.storage().instance().set(&DataKey::SlashableRoles, &roles);
+            
+            env.events().publish(
+                (symbol_short!("slash"), symbol_short!("roleadd")),
+                role,
+            );
         }
     }
 
@@ -117,6 +132,11 @@ impl SlashingContract {
             }
         }
         env.storage().instance().set(&DataKey::SlashableRoles, &new_roles);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("rolerm")),
+            role,
+        );
     }
 
     pub fn get_slashing_history(env: Env, target: Address, role: Symbol) -> Vec<SlashingRecord> {
@@ -150,11 +170,21 @@ impl SlashingContract {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("pause")),
+            true,
+        );
     }
 
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("unpause")),
+            false,
+        );
     }
 }
