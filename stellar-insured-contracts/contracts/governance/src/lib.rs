@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Symbol};
-use stellar_insured_lib::Proposal;
+use stellar_insured_lib::{Proposal, GovernanceAction};
 
 #[contracttype]
 #[derive(Clone)]
@@ -9,10 +9,14 @@ pub enum DataKey {
     Admin,
     Token,
     SlashingContract,
+    ClaimsContract,
+    RiskPoolContract,
+    PolicyContract,
     Proposal(u64),
     ProposalCounter,
     VoterRecord(u64, Address),
     VotingPeriod,
+    GovernanceActionPending(u64),  // proposal_id -> GovernanceAction
 }
 
 #[contracttype]
@@ -68,6 +72,9 @@ impl GovernanceContract {
         token: Address,
         slashing_contract: Address,
         voting_period: u64,
+        claims_contract: Address,
+        risk_pool_contract: Address,
+        policy_contract: Address,
     ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -77,6 +84,9 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::SlashingContract, &slashing_contract);
         env.storage().instance().set(&DataKey::VotingPeriod, &voting_period);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
+        env.storage().instance().set(&DataKey::RiskPoolContract, &risk_pool_contract);
+        env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
 
         // #379: emit event for initialization
         env.events().publish(
@@ -168,6 +178,103 @@ impl GovernanceContract {
         counter
     }
 
+    // #411: Create governance proposal for claim approval
+    pub fn create_claim_approval_proposal(
+        env: Env,
+        creator: Address,
+        claim_id: u64,
+        threshold: u32,
+    ) -> u64 {
+        creator.require_auth();
+
+        let title = String::from_str(&env, "Claim Approval Proposal");
+        let description = String::from_str(&env, "DAO vote required for claim approval");
+        let execution_data = String::from_str(&env, "approve_claim");
+
+        let mut counter = get_proposal_counter(&env);
+        counter += 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+
+        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+            .unwrap_or_else(|| panic!("Contract not initialized"));
+
+        let proposal = Proposal {
+            id: counter,
+            title,
+            description,
+            execution_data,
+            creator: creator.clone(),
+            expires_at: env.ledger().timestamp() + voting_period,
+            threshold_percentage: threshold,
+            yes_votes: 0,
+            no_votes: 0,
+            is_finalized: false,
+            is_executed: false,
+        };
+
+        set_proposal(&env, counter, &proposal);
+
+        // Store the governance action
+        let action = GovernanceAction::ClaimApproval(claim_id);
+        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("claim_prop")),
+            (counter, claim_id, creator),
+        );
+
+        counter
+    }
+
+    // #411: Create governance proposal for fund allocation
+    pub fn create_fund_allocation_proposal(
+        env: Env,
+        creator: Address,
+        recipient: Address,
+        amount: i128,
+        threshold: u32,
+    ) -> u64 {
+        creator.require_auth();
+
+        let title = String::from_str(&env, "Fund Allocation Proposal");
+        let description = String::from_str(&env, "DAO vote required for fund allocation");
+        let execution_data = String::from_str(&env, "allocate_funds");
+
+        let mut counter = get_proposal_counter(&env);
+        counter += 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &counter);
+
+        let voting_period: u64 = env.storage().instance().get(&DataKey::VotingPeriod)
+            .unwrap_or_else(|| panic!("Contract not initialized"));
+
+        let proposal = Proposal {
+            id: counter,
+            title,
+            description,
+            execution_data,
+            creator: creator.clone(),
+            expires_at: env.ledger().timestamp() + voting_period,
+            threshold_percentage: threshold,
+            yes_votes: 0,
+            no_votes: 0,
+            is_finalized: false,
+            is_executed: false,
+        };
+
+        set_proposal(&env, counter, &proposal);
+
+        // Store the governance action
+        let action = GovernanceAction::FundAllocation(recipient, amount);
+        env.storage().persistent().set(&DataKey::GovernanceActionPending(counter), &action);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("fund_prop")),
+            (counter, recipient, amount, creator),
+        );
+
+        counter
+    }
+
     pub fn vote(env: Env, voter: Address, proposal_id: u64, weight: i128, is_yes: bool) {
         voter.require_auth();
 
@@ -236,13 +343,56 @@ impl GovernanceContract {
             panic!("Threshold not met");
         }
 
+        // #411: Execute governance action if exists
+        let action_key = DataKey::GovernanceActionPending(proposal_id);
+        if env.storage().persistent().has(&action_key) {
+            let action: GovernanceAction = env.storage().persistent().get(&action_key).unwrap();
+            
+            match action {
+                GovernanceAction::ClaimApproval(claim_id) => {
+                    // Call claims contract to approve the claim
+                    let claims_contract: Address = env.storage().instance().get(&DataKey::ClaimsContract)
+                        .unwrap_or_else(|| panic!("Claims contract not set"));
+                    env.invoke_contract::<()>(
+                        &claims_contract,
+                        &symbol_short!("approve"),
+                        (claim_id,).into(),
+                    );
+                }
+                GovernanceAction::FundAllocation(recipient, amount) => {
+                    // Call risk pool to allocate funds
+                    let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPoolContract)
+                        .unwrap_or_else(|| panic!("Risk pool contract not set"));
+                    env.invoke_contract::<()>(
+                        &risk_pool,
+                        &symbol_short!("payout"),
+                        (recipient, amount).into(),
+                    );
+                }
+                GovernanceAction::PolicyChange(policy_id) => {
+                    // Handle policy change through policy contract
+                    let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract)
+                        .unwrap_or_else(|| panic!("Policy contract not set"));
+                    env.invoke_contract::<()>(
+                        &policy_contract,
+                        &symbol_short!("update"),
+                        (policy_id,).into(),
+                    );
+                }
+            }
+            
+            // Remove the pending action
+            env.storage().persistent().remove(&action_key);
+        }
+
         proposal.is_executed = true;
         set_proposal(&env, proposal_id, &proposal);
 
         // #379: emit event for admin/governance action
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("exec")),
-            proposal_id,
+            (proposal_id, proposal.creator),
         );
     }
 

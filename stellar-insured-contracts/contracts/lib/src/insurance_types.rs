@@ -75,3 +75,12 @@ pub struct Proposal {
     pub is_finalized: bool,
     pub is_executed: bool,
 }
+
+// #411: Add governance action types for DAO integration
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GovernanceAction {
+    ClaimApproval(u64),  // claim_id
+    FundAllocation(Address, i128),  // recipient, amount
+    PolicyChange(u64),  // policy_id
+}

@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
-use stellar_insured_lib::{InsuranceClaim, ClaimStatus, InsurancePolicy, PolicyStatus};
+use stellar_insured_lib::{InsuranceClaim, ClaimStatus, InsurancePolicy, PolicyStatus, PoolStats};
 
 #[contracttype]
 #[derive(Clone)]
@@ -67,6 +67,27 @@ impl ClaimsContract {
             panic!("Claim amount invalid or exceeds coverage");
         }
 
+        // #408: Check for duplicate claims - prevent same policy from having multiple active claims
+        let counter = get_claim_counter(&env);
+        for claim_id in 1..=counter {
+            let existing_claim = env.storage().persistent().get(&DataKey::Claim(claim_id));
+            if let Some(claim) = existing_claim {
+                if claim.policy_id == policy_id 
+                    && (claim.status == ClaimStatus::Submitted 
+                        || claim.status == ClaimStatus::UnderReview 
+                        || claim.status == ClaimStatus::Approved) {
+                    panic!("Policy already has an active claim");
+                }
+            }
+        }
+
+        // #408: Verify policy hasn't expired
+        let now = env.ledger().timestamp();
+        let expiry_time = policy.start_time + (policy.duration_days as u64 * 86400);
+        if now > expiry_time {
+            panic!("Policy has expired");
+        }
+
         let claimant = policy.holder.clone();
         claimant.require_auth();
 
@@ -85,17 +106,16 @@ impl ClaimsContract {
 
         set_claim(&env, counter, &claim);
 
+        // #412: Enhanced event emission with more details
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("submitted")),
-            (counter, policy_id),
+            (counter, policy_id, claimant, amount),
         );
 
         counter
     }
 
     pub fn start_review(env: Env, claim_id: u64) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -107,15 +127,14 @@ impl ClaimsContract {
         claim.status = ClaimStatus::UnderReview;
         set_claim(&env, claim_id, &claim);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("review")),
-            claim_id,
+            (claim_id, claim.policy_id, claim.amount),
         );
     }
 
     pub fn approve_claim(env: Env, claim_id: u64) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -127,15 +146,14 @@ impl ClaimsContract {
         claim.status = ClaimStatus::Approved;
         set_claim(&env, claim_id, &claim);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("approved")),
-            claim_id,
+            (claim_id, claim.policy_id, claim.amount, claim.claimant),
         );
     }
 
     pub fn reject_claim(env: Env, claim_id: u64) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -147,9 +165,10 @@ impl ClaimsContract {
         claim.status = ClaimStatus::Rejected;
         set_claim(&env, claim_id, &claim);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("rejected")),
-            claim_id,
+            (claim_id, claim.policy_id, claim.amount),
         );
     }
 
@@ -164,13 +183,22 @@ impl ClaimsContract {
             panic!("Only approved claims can be settled");
         }
 
-        // Cross-contract call to Risk Pool to payout
-        let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        
-        // payout_claim(recipient, amount)
+        // #410: Check risk pool balance before payout
         let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
+        
+        // Get pool stats to verify available capital
+        let pool_stats: PoolStats = env.invoke_contract(
+            &risk_pool,
+            &symbol_short!("get_stats"),
+            ().into(),
+        );
+        
+        if pool_stats.available_capital < claim.amount {
+            panic!("Insufficient risk pool funds for payout");
+        }
 
+        // Cross-contract call to Risk Pool to payout
+        // payout_claim(recipient, amount)
         env.invoke_contract::<()>(
             &risk_pool,
             &symbol_short!("payout"),
@@ -180,9 +208,10 @@ impl ClaimsContract {
         claim.status = ClaimStatus::Settled;
         set_claim(&env, claim_id, &claim);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("claim"), symbol_short!("settled")),
-            claim_id,
+            (claim_id, claim.amount, claim.claimant),
         );
     }
 
