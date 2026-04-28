@@ -711,6 +711,7 @@ pub enum FeeOperation {
     PremiumListingBid,
     IssueBadge,
     OracleUpdate,
+    BridgeTransfer,
 }
 
 /// Trait for dynamic fee provider (implemented by fee manager contract)
@@ -719,6 +720,15 @@ pub trait DynamicFeeProvider {
     /// Get recommended fee for an operation (market-based price discovery)
     #[ink(message)]
     fn get_recommended_fee(&self, operation: FeeOperation) -> u128;
+
+    /// Collect fee for an operation. Should be called with transferred value.
+    #[ink(message, payable)]
+    fn collect_fee(
+        &mut self,
+        operation: FeeOperation,
+        from: AccountId,
+        amount: u128,
+    ) -> Result<(), String>;
 }
 
 // =============================================================================

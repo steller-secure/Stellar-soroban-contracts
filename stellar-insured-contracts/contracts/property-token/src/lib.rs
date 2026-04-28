@@ -101,6 +101,7 @@ mod property_token {
         escrowed_shares: Mapping<(TokenId, AccountId), u128>,
         last_trade_price: Mapping<TokenId, u128>,
         compliance_registry: Option<AccountId>,
+        fee_manager: Option<AccountId>,
         tax_records: Mapping<(AccountId, TokenId), TaxRecord>,
     }
 
@@ -175,6 +176,7 @@ mod property_token {
                 escrowed_shares: Mapping::default(),
                 last_trade_price: Mapping::default(),
                 compliance_registry: None,
+                fee_manager: None,
                 tax_records: Mapping::default(),
             }
         }
@@ -201,7 +203,7 @@ mod property_token {
         }
 
         /// ERC-721: Transfers a token from one account to another
-        #[ink(message)]
+        #[ink(message, payable)]
         pub fn transfer_from(
             &mut self,
             from: AccountId,
@@ -209,6 +211,10 @@ mod property_token {
             token_id: TokenId,
         ) -> Result<(), Error> {
             let caller = self.env().caller();
+
+            // Collect fee for transfer
+            self.collect_operation_fee(FeeOperation::TransferProperty, 1)?;
+
             self.ensure_non_zero_account(&from)?;
             self.ensure_non_zero_account(&to)?;
 
@@ -343,6 +349,43 @@ mod property_token {
                 .unwrap_or(false)
         }
 
+        /// Internal helper to collect fees for an operation.
+        fn collect_operation_fee(
+            &mut self,
+            operation: FeeOperation,
+            count: u32,
+        ) -> Result<(), Error> {
+            if let Some(fee_manager_addr) = self.fee_manager {
+                let transferred_value = self.env().transferred_value();
+                let caller = self.env().caller();
+
+                // Call the fee manager to get recommended fee
+                use ink::codegen::TraitCallBuilder;
+                let fee_provider: ink::contract_ref!(DynamicFeeProvider) = fee_manager_addr.into();
+
+                let single_fee = fee_provider.get_recommended_fee(operation);
+                let total_fee = single_fee.saturating_mul(count as u128);
+
+                if transferred_value < total_fee {
+                    return Err(Error::Unauthorized); // Should be InsufficientFee but Error doesn't have it
+                }
+
+                // Call the fee manager to collect the fee
+                let mut fee_provider_mut: ink::contract_ref!(DynamicFeeProvider) =
+                    fee_manager_addr.into();
+
+                fee_provider_mut
+                    .call_mut()
+                    .collect_fee(operation, caller, total_fee)
+                    .transferred_value(transferred_value)
+                    .try_invoke()
+                    .map_err(|_| Error::Unauthorized)? // General error for failed call
+                    .map_err(|_| Error::Unauthorized)? // General error for logic failure in fee manager
+                    .map_err(|_| Error::Unauthorized)?;
+            }
+            Ok(())
+        }
+
         /// ERC-1155: Returns the balance of tokens for an account
         #[ink(message)]
         pub fn balance_of_batch(&self, accounts: Vec<AccountId>, ids: Vec<TokenId>) -> Vec<u128> {
@@ -430,6 +473,17 @@ mod property_token {
                 return Err(Error::Unauthorized);
             }
             self.compliance_registry = Some(registry);
+            Ok(())
+        }
+
+        /// Configure the external fee manager used for operation fees.
+        #[ink(message)]
+        pub fn set_fee_manager(&mut self, manager: AccountId) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.fee_manager = Some(manager);
             Ok(())
         }
 
@@ -915,12 +969,15 @@ mod property_token {
         }
 
         /// Property-specific: Registers a property and mints a token
-        #[ink(message)]
+        #[ink(message, payable)]
         pub fn register_property_with_token(
             &mut self,
             metadata: PropertyMetadata,
         ) -> Result<TokenId, Error> {
             let caller = self.env().caller();
+
+            // Collect fee for registration
+            self.collect_operation_fee(FeeOperation::RegisterProperty, 1)?;
 
             // Register property in the property registry (simulated here)
             // In a real implementation, this might call an external contract
@@ -991,12 +1048,17 @@ mod property_token {
         }
 
         /// Property-specific: Batch registers properties in a single gas-efficient transaction
-        #[ink(message)]
+        #[ink(message, payable)]
         pub fn batch_register_properties(
             &mut self,
             metadata_list: Vec<PropertyMetadata>,
         ) -> Result<Vec<TokenId>, Error> {
             let caller = self.env().caller();
+
+            // Collect fees for the entire batch
+            let count = metadata_list.len() as u32;
+            self.collect_operation_fee(FeeOperation::RegisterProperty, count)?;
+
             let mut issued_tokens = Vec::new();
             let current_time = self.env().block_timestamp();
 
@@ -1144,7 +1206,7 @@ mod property_token {
         }
 
         /// Cross-chain: Initiates token bridging to another chain with multi-signature
-        #[ink(message)]
+        #[ink(message, payable)]
         pub fn initiate_bridge_multisig(
             &mut self,
             token_id: TokenId,
@@ -1154,6 +1216,10 @@ mod property_token {
             timeout_blocks: Option<u64>,
         ) -> Result<u64, Error> {
             let caller = self.env().caller();
+
+            // Collect fee for bridging
+            self.collect_operation_fee(FeeOperation::BridgeTransfer, 1)?;
+
             let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
 
             // Check authorization
