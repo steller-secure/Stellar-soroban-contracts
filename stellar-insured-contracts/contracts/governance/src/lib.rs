@@ -249,7 +249,10 @@ impl GovernanceContract {
     pub fn execute_slashing_proposal(env: Env, proposal_id: u64) {
         Self::execute_proposal(env, proposal_id);
     }
+}
 
+#[contractimpl]
+impl GovernanceContract {
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         get_proposal_inner(&env, proposal_id)
     }

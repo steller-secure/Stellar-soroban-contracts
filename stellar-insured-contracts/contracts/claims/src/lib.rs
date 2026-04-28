@@ -154,8 +154,6 @@ impl ClaimsContract {
     }
 
     pub fn settle_claim(env: Env, claim_id: u64) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -165,10 +163,6 @@ impl ClaimsContract {
         }
 
         // Cross-contract call to Risk Pool to payout
-        let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        
-        // payout_claim(recipient, amount)
         let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
 
         env.invoke_contract::<()>(
@@ -185,7 +179,10 @@ impl ClaimsContract {
             claim_id,
         );
     }
+}
 
+#[contractimpl]
+impl ClaimsContract {
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
         get_claim_inner(&env, claim_id)
     }

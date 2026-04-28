@@ -34,7 +34,7 @@ impl PropertyBridge {
         default_timeout: u64,
         gas_limit: u64,
         service_fee: i128,
-        fee_token: Address,
+        fee_token: Address, 
         fee_recipient: Address,
     ) {
         if env.storage().instance().has(&DataKey::Admin) {
