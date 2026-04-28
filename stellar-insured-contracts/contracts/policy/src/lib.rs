@@ -80,9 +80,10 @@ impl PolicyContract {
 
         set_policy(&env, counter, &policy);
 
+        // #412: Enhanced event emission with more details
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("issued")),
-            (counter, holder),
+            (counter, holder, coverage_amount, premium_amount, duration_days),
         );
 
         counter
@@ -110,9 +111,10 @@ impl PolicyContract {
 
         set_policy(&env, policy_id, &policy);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("renewed")),
-            policy_id,
+            (policy_id, policy.holder, duration_days),
         );
     }
 
@@ -123,9 +125,10 @@ impl PolicyContract {
         policy.status = PolicyStatus::Cancelled;
         set_policy(&env, policy_id, &policy);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("cancelled")),
-            policy_id,
+            (policy_id, policy.holder, policy.coverage_amount),
         );
     }
 
@@ -142,9 +145,10 @@ impl PolicyContract {
         policy.status = PolicyStatus::Expired;
         set_policy(&env, policy_id, &policy);
 
+        // #412: Enhanced event emission
         env.events().publish(
             (symbol_short!("policy"), symbol_short!("expired")),
-            policy_id,
+            (policy_id, policy.holder),
         );
     }
 

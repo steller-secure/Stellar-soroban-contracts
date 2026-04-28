@@ -69,7 +69,6 @@ impl RiskPoolContract {
         let min_stake: i128 = env.storage().instance().get(&DataKey::MinStake)
             .unwrap_or_else(|| panic!("Contract not initialized"));
 
-        let min_stake: i128 = env.storage().instance().get(&DataKey::MinStake).unwrap();
         if amount < min_stake {
             panic!("Amount below minimum stake");
         }
@@ -78,32 +77,23 @@ impl RiskPoolContract {
             .unwrap_or_else(|| panic!("Contract not initialized"));
         
         // Transfer tokens from provider to this contract
-        // Note: In a real implementation, we'd use the token interface
-        // For this demo, we assume the token is a standard SAC
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&provider, &env.current_contract_address(), &amount);
 
-        let mut current_stake: i128 = env.storage().persistent().get(&DataKey::ProviderStake(provider.clone())).unwrap_or(0);
-        current_stake += amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(provider), &current_stake);
+        let current_stake = get_provider_stake(&env, &provider);
+        let new_stake = current_stake + amount;
+        env.storage().persistent().set(&DataKey::ProviderStake(provider.clone()), &new_stake);
 
-        let mut total_cap: i128 = env.storage().instance().get(&DataKey::TotalCapital)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        let mut avail_cap: i128 = env.storage().instance().get(&DataKey::AvailableCapital)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        
-        total_cap += amount;
-        avail_cap += amount;
-        let client = soroban_sdk::token::Client::new(&env, &get_token(&env));
-        client.transfer(&provider, &env.current_contract_address(), &amount);
+        let new_total = get_total_capital(&env) + amount;
+        let new_available = get_available_capital(&env) + amount;
+        env.storage().instance().set(&DataKey::TotalCapital, &new_total);
+        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        let new_stake = get_provider_stake(&env, &provider) + amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(provider), &new_stake);
-
-        env.storage().instance().set(&DataKey::TotalCapital, &(get_total_capital(&env) + amount));
-        env.storage().instance().set(&DataKey::AvailableCapital, &(get_available_capital(&env) + amount));
-
-        env.events().publish((symbol_short!("pool"), symbol_short!("deposit")), amount);
+        // #412: Enhanced event emission with provider info
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("deposit")),
+            (provider, amount, new_stake),
+        );
     }
 
     pub fn withdraw_liquidity(env: Env, provider: Address, amount: i128) {
@@ -114,9 +104,8 @@ impl RiskPoolContract {
             panic!("Insufficient stake");
         }
 
-        let mut avail_cap: i128 = env.storage().instance().get(&DataKey::AvailableCapital)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        if avail_cap < amount {
+        let avail = get_available_capital(&env);
+        if avail < amount {
             panic!("Insufficient available capital in pool");
         }
 
@@ -125,66 +114,47 @@ impl RiskPoolContract {
         let client = soroban_sdk::token::Client::new(&env, &token);
         client.transfer(&env.current_contract_address(), &provider, &amount);
 
-        current_stake -= amount;
-        env.storage().persistent().set(&DataKey::ProviderStake(provider), &current_stake);
+        let new_stake = stake - amount;
+        env.storage().persistent().set(&DataKey::ProviderStake(provider.clone()), &new_stake);
+        
+        let new_total = get_total_capital(&env) - amount;
+        let new_available = avail - amount;
+        env.storage().instance().set(&DataKey::TotalCapital, &new_total);
+        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        let mut total_cap: i128 = env.storage().instance().get(&DataKey::TotalCapital)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        total_cap -= amount;
-        avail_cap -= amount;
-
-        env.storage().instance().set(&DataKey::TotalCapital, &total_cap);
-        env.storage().instance().set(&DataKey::AvailableCapital, &avail_cap);
-        let avail = get_available_capital(&env);
-        if avail < amount {
-            panic!("Insufficient available capital in pool");
-        }
-
-        let client = soroban_sdk::token::Client::new(&env, &get_token(&env));
-        client.transfer(&env.current_contract_address(), &provider, &amount);
-
-        env.storage().persistent().set(&DataKey::ProviderStake(provider), &(stake - amount));
-        env.storage().instance().set(&DataKey::TotalCapital, &(get_total_capital(&env) - amount));
-        env.storage().instance().set(&DataKey::AvailableCapital, &(avail - amount));
-
-        env.events().publish((symbol_short!("pool"), symbol_short!("withdraw")), amount);
+        // #412: Enhanced event emission
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("withdraw")),
+            (provider, amount, new_stake),
+        );
     }
 
     pub fn payout_claim(env: Env, recipient: Address, amount: i128) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
+        let admin = get_admin(&env);
         admin.require_auth();
 
-        let mut avail_cap: i128 = env.storage().instance().get(&DataKey::AvailableCapital)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        if avail_cap < amount {
+        // #410: Verify available capital before payout
+        let avail = get_available_capital(&env);
+        if avail < amount {
             panic!("Insufficient pool funds for payout");
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token)
             .unwrap_or_else(|| panic!("Contract not initialized"));
         let client = soroban_sdk::token::Client::new(&env, &token);
-        let admin = get_admin(&env);
-        admin.require_auth();
-
-        let avail = get_available_capital(&env);
-        if avail < amount {
-            panic!("Insufficient pool funds for payout");
-        }
-
-        let client = soroban_sdk::token::Client::new(&env, &get_token(&env));
         client.transfer(&env.current_contract_address(), &recipient, &amount);
 
-        env.storage().instance().set(&DataKey::AvailableCapital, &(avail - amount));
+        let new_available = avail - amount;
+        env.storage().instance().set(&DataKey::AvailableCapital, &new_available);
 
-        let mut paid: i128 = env.storage().instance().get(&DataKey::ClaimsPaid)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        paid += amount;
-        env.storage().instance().set(&DataKey::ClaimsPaid, &paid);
-        let paid: i128 = env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0);
+        let paid = env.storage().instance().get(&DataKey::ClaimsPaid).unwrap_or(0);
         env.storage().instance().set(&DataKey::ClaimsPaid, &(paid + amount));
 
-        env.events().publish((symbol_short!("pool"), symbol_short!("payout")), amount);
+        // #412: Enhanced event emission with recipient info
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("payout")),
+            (recipient, amount, new_available),
+        );
     }
 
     pub fn get_pool_stats(env: Env) -> PoolStats {
