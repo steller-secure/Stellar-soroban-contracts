@@ -54,16 +54,21 @@ impl ClaimsContract {
     pub fn submit_claim(env: Env, policy_id: u64, amount: i128) -> u64 {
         // #381: fetch policy and validate consistency before accepting claim
         let policy_contract: Address = env.storage().instance().get(&DataKey::PolicyContract).unwrap();
+        // #407: Centralized validation via Policy contract (includes expiration check)
+        let is_active: bool = env.invoke_contract(
+            &policy_contract,
+            &symbol_short!("is_active"),
+            (policy_id,).into(),
+        );
+        if !is_active {
+            panic!("Policy is not active or has expired");
+        }
+
         let policy: InsurancePolicy = env.invoke_contract(
             &policy_contract,
             &symbol_short!("get_pol"),
             (policy_id,).into(),
         );
-
-        // Consistency check: policy must be active
-        if policy.status != PolicyStatus::Active && policy.status != PolicyStatus::Renewed {
-            panic!("Policy is not active");
-        }
 
         // Consistency check: claim amount must not exceed coverage
         if amount <= 0 || amount > policy.coverage_amount {
@@ -73,13 +78,6 @@ impl ClaimsContract {
         // #409: O(1) duplicate claim check — reject if an active claim already exists for this policy
         if env.storage().persistent().has(&DataKey::PolicyActiveClaim(policy_id)) {
             panic!("Policy already has an active claim");
-        }
-
-        // #408: Verify policy hasn't expired
-        let now = env.ledger().timestamp();
-        let expiry_time = policy.start_time + (policy.duration_days as u64 * 86400);
-        if now > expiry_time {
-            panic!("Policy has expired");
         }
 
         let claimant = policy.holder.clone();
