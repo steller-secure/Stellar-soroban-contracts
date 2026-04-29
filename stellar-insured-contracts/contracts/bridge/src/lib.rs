@@ -12,9 +12,9 @@ use types::{
     MultisigBridgeRequest, PropertyMetadata, RecoveryAction,
 };
 use validation::{
-    require_admin, require_non_zero_address, require_non_zero_u128, require_non_zero_u32,
-    require_non_zero_u64, require_not_paused, require_operator, require_supported_chain,
-    require_valid_signatures,
+    require_admin, require_future_timestamp, require_non_zero_address, require_non_zero_u128,
+    require_non_zero_u32, require_non_zero_u64, require_not_paused, require_operator,
+    require_supported_chain, require_valid_signatures,
 };
 
 const CONTRACT_VERSION: u32 = 1;
@@ -64,7 +64,7 @@ impl PropertyBridge {
             supported_chains: supported_chains.clone(),
             min_signatures_required: min_signatures,
             max_signatures_required: max_signatures,
-            default_timeout_blocks: default_timeout,
+            default_timeout_seconds: default_timeout,
             gas_limit_per_bridge: gas_limit,
             emergency_pause: false,
             metadata_preservation: true,
@@ -111,7 +111,7 @@ impl PropertyBridge {
         destination_chain: u32,
         recipient: Address,
         required_signatures: u32,
-        timeout_blocks: Option<u64>,
+        timeout_seconds: Option<u64>,
         metadata: PropertyMetadata,
         nonce: u64,
     ) -> u64 {
@@ -122,8 +122,8 @@ impl PropertyBridge {
         require_non_zero_u32(required_signatures, "required_signatures");
         require_non_zero_u64(metadata.size, "metadata.size");
         require_non_zero_u128(metadata.valuation, "metadata.valuation");
-        if let Some(blocks) = timeout_blocks {
-            require_non_zero_u64(blocks, "timeout_blocks");
+        if let Some(seconds) = timeout_seconds {
+            require_non_zero_u64(seconds, "timeout_seconds");
         }
 
         let current_nonce: u64 = env.storage().persistent().get(&DataKey::Nonce(caller.clone())).unwrap_or(0);
@@ -152,8 +152,12 @@ impl PropertyBridge {
         counter += 1;
         env.storage().instance().set(&DataKey::ReqCounter, &counter);
 
-        let current_block = env.ledger().sequence() as u64;
-        let expires_at = timeout_blocks.map(|b| current_block + b);
+        let now = env.ledger().timestamp();
+        let expires_at = timeout_seconds.map(|s| now + s);
+        
+        if let Some(expiry) = expires_at {
+            require_future_timestamp(expiry, now, "expires_at");
+        }
 
         let request = MultisigBridgeRequest {
             request_id: counter,
@@ -164,7 +168,7 @@ impl PropertyBridge {
             recipient,
             required_signatures,
             signatures: Vec::new(&env),
-            created_at: current_block,
+            created_at: now,
             expires_at,
             status: BridgeOperationStatus::Pending,
             metadata,
@@ -196,7 +200,7 @@ impl PropertyBridge {
             .expect("Request not found");
 
         if let Some(expires_at) = request.expires_at {
-            if (env.ledger().sequence() as u64) > expires_at {
+            if env.ledger().timestamp() > expires_at {
                 panic!("Request expired");
             }
         }

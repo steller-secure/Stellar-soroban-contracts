@@ -86,3 +86,10 @@ pub fn require_non_zero_u128(value: u128, field: &str) {
         panic!("{} must be greater than zero", field);
     }
 }
+
+/// Panics if the timestamp is not in the future.
+pub fn require_future_timestamp(timestamp: u64, now: u64, field: &str) {
+    if timestamp <= now {
+        panic!("{} must be in the future", field);
+    }
+}
