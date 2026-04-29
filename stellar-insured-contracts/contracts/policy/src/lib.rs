@@ -98,12 +98,30 @@ impl PolicyContract {
         get_policy_inner(&env, policy_id)
     }
 
+    pub fn is_active(env: Env, policy_id: u64) -> bool {
+        let policy = get_policy_inner(&env, policy_id);
+        if policy.status != PolicyStatus::Active && policy.status != PolicyStatus::Renewed {
+            return false;
+        }
+
+        let now = env.ledger().timestamp();
+        let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
+        now <= expiry
+    }
+
     pub fn renew_policy(env: Env, policy_id: u64, duration_days: u32) {
         let mut policy = get_policy_inner(&env, policy_id);
         policy.holder.require_auth();
 
         if policy.status != PolicyStatus::Active && policy.status != PolicyStatus::Renewed {
             panic!("Policy not active");
+        }
+
+        // #407: Ensure policy hasn't expired before renewal
+        let now = env.ledger().timestamp();
+        let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
+        if now > expiry {
+            panic!("Policy has expired and cannot be renewed");
         }
 
         policy.duration_days += duration_days;
@@ -121,6 +139,13 @@ impl PolicyContract {
     pub fn cancel_policy(env: Env, policy_id: u64) {
         let mut policy = get_policy_inner(&env, policy_id);
         policy.holder.require_auth();
+
+        // #407: Ensure policy hasn't expired before cancellation
+        let now = env.ledger().timestamp();
+        let expiry = policy.start_time + (policy.duration_days as u64 * 86400);
+        if now > expiry {
+            panic!("Policy has already expired");
+        }
 
         policy.status = PolicyStatus::Cancelled;
         set_policy(&env, policy_id, &policy);
