@@ -45,6 +45,9 @@ impl ClaimsContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
         }
+        if admin == policy_contract || admin == risk_pool || policy_contract == risk_pool {
+            panic!("Addresses must be distinct");
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::PolicyContract, &policy_contract);
         env.storage().instance().set(&DataKey::RiskPool, &risk_pool);
@@ -71,8 +74,8 @@ impl ClaimsContract {
         );
 
         // Consistency check: claim amount must not exceed coverage
-        if amount <= 0 || amount > policy.coverage_amount {
-            panic!("Claim amount invalid or exceeds coverage");
+        if amount <= 0 || (amount + policy.total_claimed) > policy.coverage_amount {
+            panic!("Claim amount invalid or exceeds remaining coverage");
         }
 
         // #409: O(1) duplicate claim check — reject if an active claim already exists for this policy
@@ -201,6 +204,13 @@ impl ClaimsContract {
             &risk_pool,
             &symbol_short!("payout"),
             (claim.claimant.clone(), claim.amount).into(),
+        );
+
+        // Update total claimed in policy contract
+        env.invoke_contract::<()>(
+            &policy_contract,
+            &symbol_short!("update_cl"),
+            (claim.policy_id, claim.amount).into(),
         );
 
         claim.status = ClaimStatus::Settled;

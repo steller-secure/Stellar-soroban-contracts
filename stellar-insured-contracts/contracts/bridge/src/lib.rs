@@ -42,6 +42,8 @@ impl PropertyBridge {
             panic!("Already initialized");
         }
         require_non_zero_address(&admin);
+        require_non_zero_address(&fee_token);
+        require_non_zero_address(&fee_recipient);
         if supported_chains.is_empty() {
             panic!("At least one supported chain is required");
         }
@@ -397,6 +399,14 @@ impl PropertyBridge {
         let operators: Vec<Address> =
             env.storage().instance().get(&DataKey::Operators)
                 .unwrap_or_else(|| panic!("Contract not initialized"));
+        
+        let config: BridgeConfig = env.storage().instance().get(&DataKey::Config)
+            .unwrap_or_else(|| panic!("Contract not initialized"));
+
+        if operators.len() <= config.min_signatures_required {
+            panic!("Cannot remove operator: minimum signature requirement would not be met");
+        }
+
         let mut new_operators = Vec::new(&env);
         for op in operators.iter() {
             if op != operator {

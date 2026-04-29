@@ -8,6 +8,7 @@ use stellar_insured_lib::{InsurancePolicy, PolicyStatus, PolicyType};
 pub enum DataKey {
     Admin,
     RiskPool,
+    ClaimsContract,
     Policy(u64),
     PolicyCounter,
 }
@@ -76,6 +77,7 @@ impl PolicyContract {
             policy_type,
             status: PolicyStatus::Active,
             risk_pool,
+            total_claimed: 0,
         };
 
         set_policy(&env, counter, &policy);
@@ -157,6 +159,26 @@ impl PolicyContract {
         );
     }
 
+    pub fn set_claims_contract(env: Env, claims_contract: Address) {
+        get_admin(&env).require_auth();
+        env.storage().instance().set(&DataKey::ClaimsContract, &claims_contract);
+    }
+
+    pub fn update_claimed(env: Env, policy_id: u64, amount: i128) {
+        let claims_contract: Address = env.storage().instance().get(&DataKey::ClaimsContract)
+            .expect("Claims contract not set");
+        claims_contract.require_auth();
+
+        let mut policy = get_policy_inner(&env, policy_id);
+        policy.total_claimed += amount;
+
+        if policy.total_claimed > policy.coverage_amount {
+            panic!("Total claimed exceeds coverage amount");
+        }
+
+        set_policy(&env, policy_id, &policy);
+    }
+
     pub fn expire_policy(env: Env, policy_id: u64) {
         let mut policy = get_policy_inner(&env, policy_id);
 
@@ -191,5 +213,9 @@ impl PolicyContract {
 
     pub fn get_stats(env: Env) -> u64 {
         get_policy_counter(&env)
+    }
+
+    pub fn update_cl(env: Env, policy_id: u64, amount: i128) {
+        Self::update_claimed(env, policy_id, amount)
     }
 }
