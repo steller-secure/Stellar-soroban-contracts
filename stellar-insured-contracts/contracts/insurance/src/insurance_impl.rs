@@ -53,6 +53,7 @@
                 total_platform_fees_collected: 0,
                 min_premium_amount: 1_000_000,     // Minimum premium (adjust based on token decimals)
                 oracle_contract: None,
+                fee_manager: None,
             }
         }
 
@@ -227,6 +228,23 @@
                 let mut pool = self.pools.get(&policy.pool_id).ok_or(InsuranceError::PoolNotFound)?;
                 let fee = paid.saturating_mul(self.platform_fee_rate as u128) / 10_000u128;
                 let pool_share = paid.saturating_sub(fee);
+                
+                // Collect fee via FeeManager if set
+                if let Some(fee_manager_addr) = self.fee_manager {
+                    let mut fee_provider: ink::contract_ref!(DynamicFeeProvider) = fee_manager_addr.into();
+                    // Forward the fee to the FeeManager
+                    if fee > 0 {
+                        // We use a manual transfer since collect_fee is payable
+                        // Note: ink! 5.x cross-contract calls with value
+                        fee_provider.call_mut()
+                            .collect_fee(FeeOperation::RenewPolicy, caller, fee)
+                            .transferred_value(fee)
+                            .try_invoke()
+                            .map_err(|_| InsuranceError::TransferFailed)?
+                            .map_err(|_| InsuranceError::TransferFailed)?;
+                    }
+                }
+
                 pool.total_premiums_collected = pool.total_premiums_collected.saturating_add(pool_share);
                 pool.available_capital = pool.available_capital.saturating_add(pool_share);
                 Self::apply_reward_accrual(&mut pool, pool_share);
@@ -896,6 +914,20 @@
             let fee = paid.saturating_mul(self.platform_fee_rate as u128) / 10_000;
             let pool_share = paid.saturating_sub(fee);
             
+            // Collect fee via FeeManager if set
+            if let Some(fee_manager_addr) = self.fee_manager {
+                let mut fee_provider: ink::contract_ref!(DynamicFeeProvider) = fee_manager_addr.into();
+                // Forward the fee to the FeeManager
+                if fee > 0 {
+                    fee_provider.call_mut()
+                        .collect_fee(FeeOperation::IssuePolicy, caller, fee)
+                        .transferred_value(fee)
+                        .try_invoke()
+                        .map_err(|_| InsuranceError::TransferFailed)?
+                        .map_err(|_| InsuranceError::TransferFailed)?;
+                }
+            }
+
             // FIX: Track platform fees collected
             self.total_platform_fees_collected += fee;
             // Ensure pool has enough capital (including this premium) for coverage
@@ -2388,6 +2420,21 @@
             
             // Store previous status for event emission
             let previous_status = claim.status.clone();
+
+            claim.status = ClaimStatus::Disputed;
+            self.claims.insert(&claim_id, &claim);
+
+            self.env().emit_event(ClaimDisputed {
+                claim_id,
+                raised_by: caller,
+                dispute_deadline: claim.dispute_deadline.unwrap_or(0),
+                previous_status,
+                timestamp: now,
+            });
+
+            Ok(())
+        }
+
         /// Return a risk pool by ID when it exists.
         pub fn get_pool(&self, pool_id: u64) -> Option<RiskPool> {
             self.pools.get(&pool_id)
@@ -2436,18 +2483,6 @@
                 }
             }
 
-            claim.status = ClaimStatus::Disputed;
-            self.claims.insert(&claim_id, &claim);
-
-            self.env().emit_event(ClaimDisputed {
-                claim_id,
-                raised_by: caller,
-                dispute_deadline: claim.dispute_deadline.unwrap_or(0),
-                previous_status,
-                timestamp: now,
-            });
-
-            Ok(())
             (active, expired, self.policy_count)
         }
 
@@ -2618,6 +2653,20 @@
         #[ink(message)]
         pub fn get_admin(&self) -> AccountId {
             self.admin
+        }
+
+        /// Set fee manager contract address (admin only)
+        #[ink(message)]
+        pub fn set_fee_manager(&mut self, fee_manager: Option<AccountId>) -> Result<(), InsuranceError> {
+            self.ensure_role(Role::Admin)?;
+            self.fee_manager = fee_manager;
+            Ok(())
+        }
+
+        /// Get fee manager contract address
+        #[ink(message)]
+        pub fn get_fee_manager(&self) -> Option<AccountId> {
+            self.fee_manager
         }
 
         // =====================================================================

@@ -220,14 +220,21 @@ pub struct RiskAssessmentUpdated {
 }
 
 #[ink(event)]
-pub struct EvidenceSubmitted {
+pub struct ClaimDisputed {
     #[ink(topic)]
-    pub evidence_id: u64,
+    pub claim_id: u64,
     #[ink(topic)]
     pub raised_by: AccountId,
     pub dispute_deadline: u64,
     pub previous_status: ClaimStatus,
     pub timestamp: u64,
+}
+
+#[ink(event)]
+pub struct EvidenceSubmitted {
+    #[ink(topic)]
+    pub evidence_id: u64,
+    #[ink(topic)]
     pub claim_id: u64,
     pub evidence_type: String,
     pub ipfs_hash: String,

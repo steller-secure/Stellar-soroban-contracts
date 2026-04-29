@@ -712,6 +712,8 @@ pub enum FeeOperation {
     IssueBadge,
     OracleUpdate,
     BridgeTransfer,
+    IssuePolicy,
+    RenewPolicy,
 }
 
 /// Trait for dynamic fee provider (implemented by fee manager contract)
