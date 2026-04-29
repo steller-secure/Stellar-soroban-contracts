@@ -28,6 +28,8 @@ mod propchain_insurance {
         UnderwritingCriteria, REWARD_PRECISION,
     };
 
+    use propchain_traits::{DynamicFeeProvider, FeeOperation};
+
     // =========================================================================
     // EVENTS  (single source of truth: events.rs; included here so ink! macros
     // can see the definitions — do NOT re-declare events below this line, #352)
@@ -135,6 +137,9 @@ mod propchain_insurance {
 
         // Minimum premium to prevent rounding exploits
         min_premium_amount: u128,
+
+        // Fee manager contract for dynamic fees
+        fee_manager: Option<AccountId>,
     }
 
     // =========================================================================
