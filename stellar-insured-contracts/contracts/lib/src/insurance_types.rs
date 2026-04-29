@@ -28,6 +28,7 @@ pub struct InsurancePolicy {
     pub policy_type: PolicyType,
     pub status: PolicyStatus,
     pub risk_pool: Address,
+    pub total_claimed: i128,
 }
 
 #[contracttype]
