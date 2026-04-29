@@ -34,6 +34,9 @@ impl PropertyBridge {
         max_signatures: u32,
         default_timeout: u64,
         gas_limit: u64,
+        service_fee: i128,
+        fee_token: Address, 
+        fee_recipient: Address,
     ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -65,6 +68,9 @@ impl PropertyBridge {
             gas_limit_per_bridge: gas_limit,
             emergency_pause: false,
             metadata_preservation: true,
+            service_fee,
+            fee_token,
+            fee_recipient,
         };
 
         env.storage().instance().set(&DataKey::Config, &config);
@@ -98,13 +104,6 @@ impl PropertyBridge {
         );
     }
 
-    pub fn version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Version)
-            .unwrap_or(CONTRACT_VERSION)
-    }
-
     pub fn initiate_bridge_multisig(
         env: Env,
         caller: Address,
@@ -127,16 +126,20 @@ impl PropertyBridge {
             require_non_zero_u64(blocks, "timeout_blocks");
         }
 
-        // Nonce validation for replay protection (#349)
         let current_nonce: u64 = env.storage().persistent().get(&DataKey::Nonce(caller.clone())).unwrap_or(0);
         if nonce != current_nonce + 1 {
             panic!("Invalid nonce");
         }
         env.storage().persistent().set(&DataKey::Nonce(caller.clone()), &nonce);
 
-        // Read config once and reuse — avoids redundant storage reads (#351, #353).
         let config: BridgeConfig = env.storage().instance().get(&DataKey::Config)
             .unwrap_or_else(|| panic!("Contract not initialized"));
+
+        if config.service_fee > 0 {
+            use soroban_sdk::token;
+            let client = token::Client::new(&env, &config.fee_token);
+            client.transfer(&caller, &config.fee_recipient, &config.service_fee);
+        }
         require_not_paused(&env);
         require_supported_chain(&config, destination_chain);
         require_valid_signatures(&config, required_signatures);
@@ -249,7 +252,6 @@ impl PropertyBridge {
         tx_counter += 1;
         env.storage().instance().set(&DataKey::TxCounter, &tx_counter);
 
-        // Cache sender once to avoid repeated clones on history key lookups (#351).
         let sender = request.sender.clone();
 
         let transaction = BridgeTransaction {
@@ -288,7 +290,6 @@ impl PropertyBridge {
             .persistent()
             .set(&DataKey::History(sender), &history);
 
-        // Standardized event: (contract, action) topics with structured payload (#352).
         env.events().publish(
             (symbol_short!("bridge"), symbol_short!("executed")),
             (request_id, tx_hash),
@@ -340,93 +341,6 @@ impl PropertyBridge {
             (symbol_short!("bridge"), symbol_short!("recover")),
             request_id,
         );
-
-            false
-        }
-
-        /// Return the local bridge chain ID used when creating source-chain requests.
-        fn get_current_chain_id(&self) -> ChainId {
-            // This should return the current chain ID
-            // For now, we'll use a default value
-            1
-        }
-
-        /// Hash the bridge request fields into a transaction identifier.
-        fn generate_transaction_hash(&self, request: &MultisigBridgeRequest) -> Hash {
-            // Generate a cryptographic SHA-256 hash of the bridge request to
-            // ensure collision resistance and prevent trivial forgery or replay.
-            use scale::Encode;
-            use ink::env::hash::{Sha2x256, HashOutput};
-
-            let data = (
-                request.request_id,
-                request.token_id,
-                request.source_chain,
-                request.destination_chain,
-                request.sender,
-                request.recipient,
-                self.env().block_timestamp(),
-            );
-
-            let encoded_data = data.encode();
-
-            // Compute SHA-256 over the encoded bytes
-            let mut output: <Sha2x256 as HashOutput>::Type = <Sha2x256 as HashOutput>::Type::default();
-            ink::env::hash_bytes::<Sha2x256>(&encoded_data, &mut output);
-
-            // Convert the hash output to the contract `Hash` type
-            Hash::from(output)
-        }
-
-        /// Estimate bridge gas from the configured base limit and metadata size.
-        fn estimate_gas_usage(&self, request: &MultisigBridgeRequest) -> u64 {
-            let base_gas = self.config.gas_limit_per_bridge;
-            let per_byte = self
-                .chain_info
-                .get(request.destination_chain)
-                .map(|c| c.gas_multiplier as u64)
-                .unwrap_or(100);
-            let metadata_gas = request.metadata.legal_description.len() as u64 * per_byte / 100;
-            base_gas + metadata_gas
-        }
-
-        /// Verify a Merkle proof.
-        ///
-        /// Leaf = SHA-256(message_hash_bytes || leaf_index_le_bytes).
-        /// Each step: if the current index is even, node = SHA-256(current || sibling),
-        /// otherwise node = SHA-256(sibling || current). Matches standard binary Merkle trees.
-        fn verify_merkle_proof(&self, message_hash: Hash, proof: &MerkleProof) -> bool {
-            use ink::env::hash::{HashOutput, Sha2x256};
-
-            let mut current: [u8; 32] = *message_hash.as_ref();
-            // Mix in the leaf index to bind the proof to a specific position
-            let index_bytes = proof.leaf_index.to_le_bytes();
-            let mut leaf_input = [0u8; 40];
-            leaf_input[..32].copy_from_slice(&current);
-            leaf_input[32..].copy_from_slice(&index_bytes);
-            let mut leaf_hash = <Sha2x256 as HashOutput>::Type::default();
-            ink::env::hash_bytes::<Sha2x256>(&leaf_input, &mut leaf_hash);
-            current = leaf_hash;
-
-            let mut index = proof.leaf_index;
-            for sibling in &proof.proof {
-                let sibling_bytes: [u8; 32] = *sibling.as_ref();
-                let mut node_input = [0u8; 64];
-                if index % 2 == 0 {
-                    node_input[..32].copy_from_slice(&current);
-                    node_input[32..].copy_from_slice(&sibling_bytes);
-                } else {
-                    node_input[..32].copy_from_slice(&sibling_bytes);
-                    node_input[32..].copy_from_slice(&current);
-                }
-                let mut node_hash = <Sha2x256 as HashOutput>::Type::default();
-                ink::env::hash_bytes::<Sha2x256>(&node_input, &mut node_hash);
-                current = node_hash;
-                index /= 2;
-            }
-
-            Hash::from(current) == proof.root
-        }
     }
 
     pub fn set_pause(env: Env, admin: Address, paused: bool) {
@@ -491,5 +405,60 @@ impl PropertyBridge {
             (symbol_short!("bridge"), symbol_short!("oprm")),
             operator,
         );
+    }
+}
+
+#[contractimpl]
+impl PropertyBridge {
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(CONTRACT_VERSION)
+    }
+
+    pub fn get_config(env: Env) -> BridgeConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("Contract not initialized")
+    }
+
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized")
+    }
+
+    pub fn get_request(env: Env, request_id: u64) -> Option<MultisigBridgeRequest> {
+        env.storage().persistent().get(&DataKey::Request(request_id))
+    }
+
+    pub fn get_history(env: Env, address: Address) -> Vec<BridgeTransaction> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::History(address))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    pub fn get_chain_info(env: Env, chain_id: u32) -> Option<ChainBridgeInfo> {
+        env.storage().persistent().get(&DataKey::ChainInfo(chain_id))
+    }
+
+    pub fn is_operator(env: Env, address: Address) -> bool {
+        let operators: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Operators)
+            .unwrap_or(Vec::new(&env));
+        operators.contains(address)
+    }
+
+    pub fn get_nonce(env: Env, address: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Nonce(address))
+            .unwrap_or(0)
     }
 }

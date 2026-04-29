@@ -155,6 +155,7 @@ mod propchain_fees {
         AlreadySettled,
         InvalidConfig,
         InvalidProperty,
+        InvalidFeeAmount,
     }
 
     #[ink(storage)]
@@ -806,6 +807,31 @@ mod propchain_fees {
         fn get_recommended_fee(&self, operation: FeeOperation) -> u128 {
             self.calculate_fee(operation)
         }
+
+        /// Collect fee for an operation. Should be called with transferred value.
+        #[ink(message, payable)]
+        fn collect_fee(
+            &mut self,
+            operation: FeeOperation,
+            from: AccountId,
+            amount: u128,
+        ) -> Result<(), String> {
+            let recommended_fee = self.calculate_fee(operation);
+            let transferred_value = self.env().transferred_value();
+
+            if transferred_value < amount {
+                return Err(String::from("Insufficient fee transferred"));
+            }
+
+            // Note: We don't necessarily require amount == recommended_fee
+            // as users might want to overpay or there might be batching logic
+            // but we should at least check against some minimum if needed.
+
+            self.record_fee_collected(operation, amount, from)
+                .map_err(|_| String::from("Failed to record fee collection"))?;
+
+            Ok(())
+        }
     }
 
     #[cfg(test)]
@@ -850,6 +876,32 @@ mod propchain_fees {
             let est = contract.get_fee_estimate(FeeOperation::TransferProperty);
             assert!(!est.recommendation.is_empty());
             assert!(!est.congestion_level.is_empty());
+        }
+
+        #[ink::test]
+        fn test_collect_fee() {
+            let mut contract = FeeManager::new(1000, 100, 50_000);
+            let caller = ink::env::test::default_accounts::<ink::env::DefaultEnvironment>().alice;
+
+            // Set transferred value for the test
+            ink::env::test::set_value_transferred::<ink::env::DefaultEnvironment>(1000);
+
+            let result = contract.collect_fee(FeeOperation::RegisterProperty, caller, 1000);
+            assert!(result.is_ok());
+            assert_eq!(contract.get_fee_report().total_fees_collected, 1000);
+        }
+
+        #[ink::test]
+        fn test_collect_insufficient_fee() {
+            let mut contract = FeeManager::new(1000, 100, 50_000);
+            let caller = ink::env::test::default_accounts::<ink::env::DefaultEnvironment>().alice;
+
+            // Set transferred value less than the amount we try to collect
+            ink::env::test::set_value_transferred::<ink::env::DefaultEnvironment>(500);
+
+            let result = contract.collect_fee(FeeOperation::RegisterProperty, caller, 1000);
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err(), "Insufficient fee transferred");
         }
     }
 }

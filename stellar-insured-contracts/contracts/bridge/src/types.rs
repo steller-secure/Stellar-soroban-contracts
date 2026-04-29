@@ -31,6 +31,9 @@ pub struct BridgeConfig {
     pub gas_limit_per_bridge: u64,
     pub emergency_pause: bool,
     pub metadata_preservation: bool,
+    pub service_fee: i128,
+    pub fee_token: Address,
+    pub fee_recipient: Address,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

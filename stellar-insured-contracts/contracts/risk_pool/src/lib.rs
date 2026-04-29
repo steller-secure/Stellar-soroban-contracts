@@ -67,7 +67,7 @@ impl RiskPoolContract {
         provider.require_auth();
         
         let min_stake: i128 = env.storage().instance().get(&DataKey::MinStake)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
+            .expect("Contract not initialized");
 
         if amount < min_stake {
             panic!("Amount below minimum stake");
@@ -156,7 +156,10 @@ impl RiskPoolContract {
             (recipient, amount, new_available),
         );
     }
+}
 
+#[contractimpl]
+impl RiskPoolContract {
     pub fn get_pool_stats(env: Env) -> PoolStats {
         PoolStats {
             total_capital: get_total_capital(&env),

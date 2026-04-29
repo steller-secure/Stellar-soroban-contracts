@@ -195,6 +195,8 @@ impl ClaimsContract {
 
         // Cross-contract call to Risk Pool to payout
         // payout_claim(recipient, amount)
+        let risk_pool: Address = env.storage().instance().get(&DataKey::RiskPool).unwrap();
+
         env.invoke_contract::<()>(
             &risk_pool,
             &symbol_short!("payout"),
@@ -213,7 +215,10 @@ impl ClaimsContract {
             (claim_id, claim.amount, claim.claimant),
         );
     }
+}
 
+#[contractimpl]
+impl ClaimsContract {
     pub fn get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
         get_claim_inner(&env, claim_id)
     }

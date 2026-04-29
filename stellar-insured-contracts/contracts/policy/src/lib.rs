@@ -176,6 +176,18 @@ impl PolicyContract {
             (policy_id, policy.holder),
         );
     }
+}
+
+#[contractimpl]
+impl PolicyContract {
+    pub fn get_policy(env: Env, policy_id: u64) -> InsurancePolicy {
+        get_policy_inner(&env, policy_id)
+    }
+
+    // Alias used by claims contract cross-contract call
+    pub fn get_pol(env: Env, policy_id: u64) -> InsurancePolicy {
+        get_policy_inner(&env, policy_id)
+    }
 
     pub fn get_stats(env: Env) -> u64 {
         get_policy_counter(&env)

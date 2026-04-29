@@ -37,13 +37,6 @@ impl AdvancedEscrow {
             .publish((symbol_short!("escrow"), symbol_short!("init")), admin);
     }
 
-    pub fn version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Version)
-            .unwrap_or(CONTRACT_VERSION)
-    }
-
     pub fn set_pause(env: Env, admin: Address, paused: bool) {
         admin.require_auth();
         require_non_zero_address(&admin);
@@ -271,5 +264,55 @@ impl AdvancedEscrow {
             (symbol_short!("escrow"), symbol_short!("signed")),
             (escrow_id, signer, count),
         );
+    }
+}
+
+#[contractimpl]
+impl AdvancedEscrow {
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(CONTRACT_VERSION)
+    }
+
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Contract not initialized")
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    pub fn get_escrow(env: Env, escrow_id: u64) -> Option<EscrowData> {
+        env.storage().persistent().get(&DataKey::Escrow(escrow_id))
+    }
+
+    pub fn get_escrow_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::EscrowCount).unwrap_or(0)
+    }
+
+    pub fn get_multisig_config(env: Env, escrow_id: u64) -> Option<MultiSigConfig> {
+        env.storage().persistent().get(&DataKey::MultiSig(escrow_id))
+    }
+
+    pub fn get_sig_count(env: Env, escrow_id: u64, approval_type: ApprovalType) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SigCount(escrow_id, approval_type))
+            .unwrap_or(0)
+    }
+
+    pub fn get_nonce(env: Env, address: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Nonce(address))
+            .unwrap_or(0)
     }
 }

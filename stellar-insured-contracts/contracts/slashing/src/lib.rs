@@ -90,8 +90,6 @@ impl SlashingContract {
     }
 
     pub fn configure_penalty_parameters(env: Env, role: Symbol, params: PenaltyParams) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -99,7 +97,8 @@ impl SlashingContract {
         
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("config")),
-            (role, params.percentage, params.multiplier),
+            (role.clone(), params.percentage, params.multiplier),
+        );
 
         // #379: emit event for admin action
         env.events().publish(
@@ -109,8 +108,6 @@ impl SlashingContract {
     }
 
     pub fn slash_funds(env: Env, target: Address, role: Symbol, reason: String, amount: i128) {
-        let governance: Address = env.storage().instance().get(&DataKey::Governance)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let governance = get_governance(&env);
         governance.require_auth();
 
@@ -154,8 +151,6 @@ impl SlashingContract {
     }
 
     pub fn add_slashable_role(env: Env, role: Symbol) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -166,7 +161,7 @@ impl SlashingContract {
             
             env.events().publish(
                 (symbol_short!("slash"), symbol_short!("roleadd")),
-                role,
+                role.clone(),
             );
         }
 
@@ -178,8 +173,6 @@ impl SlashingContract {
     }
 
     pub fn remove_slashable_role(env: Env, role: Symbol) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
         let admin = get_admin(&env);
         admin.require_auth();
 
@@ -194,6 +187,8 @@ impl SlashingContract {
         
         env.events().publish(
             (symbol_short!("slash"), symbol_short!("rolerm")),
+            role.clone(),
+        );
 
         // #379: emit event for admin action
         env.events().publish(
@@ -202,6 +197,43 @@ impl SlashingContract {
         );
     }
 
+    pub fn pause(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("pause")),
+            true,
+        );
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("paused")),
+            true,
+        );
+    }
+
+    pub fn unpause(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        
+        env.events().publish(
+            (symbol_short!("slash"), symbol_short!("unpause")),
+            false,
+        );
+
+        // #379: emit event for admin action
+        env.events().publish(
+            (symbol_short!("admin"), symbol_short!("paused")),
+            false,
+        );
+    }
+}
+
+#[contractimpl]
+impl SlashingContract {
     pub fn get_slashing_history(env: Env, target: Address, role: Symbol) -> Vec<SlashingRecord> {
         get_history_inner(&env, &target, &role)
     }
@@ -226,39 +258,5 @@ impl SlashingContract {
         }
 
         true
-    }
-
-    pub fn pause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        let admin = get_admin(&env);
-        admin.require_auth();
-        env.storage().instance().set(&DataKey::Paused, &true);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("pause")),
-
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("paused")),
-            true,
-        );
-    }
-
-    pub fn unpause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"));
-        let admin = get_admin(&env);
-        admin.require_auth();
-        env.storage().instance().set(&DataKey::Paused, &false);
-        
-        env.events().publish(
-            (symbol_short!("slash"), symbol_short!("unpause")),
-
-        // #379: emit event for admin action
-        env.events().publish(
-            (symbol_short!("admin"), symbol_short!("paused")),
-            false,
-        );
     }
 }
